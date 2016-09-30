@@ -1,0 +1,12 @@
+Source: openrc
+Section: admin
+Priority: optional
+Maintainer: Azer Abdullaev (Like All) <like-all@yandex.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.5
+Homepage: https://github.com/OpenRC/openrc
+
+Package: openrc
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: The OpenRC init system
