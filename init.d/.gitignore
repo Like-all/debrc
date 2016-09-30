@@ -1,3 +1,5 @@
+binfmt
+modules-load
 bootmisc
 fsck
 hostname
@@ -10,7 +12,6 @@ network
 root
 savecache
 swap
-swapfiles
 sysctl
 urandom
 devfs
@@ -22,8 +23,11 @@ killprocs
 modules
 mount-ro
 mtab
+net-online
 numlock
+osclock
 procfs
+s6-svscan
 staticroute
 sysfs
 devdb
@@ -33,6 +37,7 @@ pf
 rarpd
 rc-enabled
 rpcbind
+runsvdir
 savecore
 swap-blk
 swclock

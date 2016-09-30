@@ -1,31 +1,18 @@
 /*
-  helpers.h
-  This is private to us and not for user consumption
-*/
+ * helpers.h
+ * This is private to us and not for user consumption
+ */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #ifndef __HELPERS_H__
@@ -48,25 +35,6 @@
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-/* Some libc implemntations don't have these */
-#ifndef TAILQ_CONCAT
-#define TAILQ_CONCAT(head1, head2, field) do {				      \
-		if (!TAILQ_EMPTY(head2)) {				      \
-			*(head1)->tqh_last = (head2)->tqh_first;	      \
-			(head2)->tqh_first->field.tqe_prev = (head1)->tqh_last; \
-			(head1)->tqh_last = (head2)->tqh_last;		      \
-			TAILQ_INIT((head2));				      \
-		}							      \
-	} while (0)
-#endif
-
-#ifndef TAILQ_FOREACH_SAFE
-#define	TAILQ_FOREACH_SAFE(var, head, field, tvar)			      \
-	for ((var) = TAILQ_FIRST((head));				      \
-	     (var) && ((tvar) = TAILQ_NEXT((var), field), 1);		      \
-	     (var) = (tvar))
-#endif
-
 #ifdef __GLIBC__
 #  if ! defined (__UCLIBC__) && ! defined (__dietlibc__)
 #    define strlcpy(dst, src, size) snprintf(dst, size, "%s", src)
@@ -84,6 +52,9 @@
 		}							      \
 	} while (/* CONSTCOND */ 0)
 #endif
+
+#include <stdbool.h>
+#include <sys/stat.h>
 
 _unused static void *xmalloc (size_t size)
 {
@@ -134,6 +105,20 @@ _unused static const char *basename_c(const char *path)
 	if (slash)
 		return (++slash);
 	return (path);
+}
+
+_unused static bool exists(const char *pathname)
+{
+	struct stat buf;
+
+	return (stat(pathname, &buf) == 0);
+}
+
+_unused static bool existss(const char *pathname)
+{
+	struct stat buf;
+
+	return (stat(pathname, &buf) == 0 && buf.st_size != 0);
 }
 
 #endif

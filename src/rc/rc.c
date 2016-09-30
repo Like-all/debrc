@@ -9,28 +9,15 @@
  */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 const char rc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
@@ -58,14 +45,35 @@ const char rc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
 #include <termios.h>
 #include <unistd.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-logger.h"
 #include "rc-misc.h"
 #include "rc-plugin.h"
 
 #include "version.h"
+#include "_usage.h"
+
+const char *extraopts = NULL;
+const char *getoptstring = "a:no:s:S" getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "no-stop", 0, NULL, 'n' },
+	{ "override",    1, NULL, 'o' },
+	{ "service",     1, NULL, 's' },
+	{ "sys",         0, NULL, 'S' },
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"do not stop any services",
+	"override the next runlevel to change into\n"
+	"when leaving single user or boot runlevels",
+	"runs the service specified with the rest\nof the arguments",
+	"output the RC system type, if any",
+	longopts_help_COMMON
+};
+const char *usagestring = ""					\
+    "Usage: openrc [options] [<runlevel>]";
 
 #define INITSH                  RC_LIBEXECDIR "/sh/init.sh"
 #define INITEARLYSH             RC_LIBEXECDIR "/sh/init-early.sh"
@@ -78,6 +86,12 @@ const char rc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
 #define DEVBOOT			"/dev/.rcboot"
 
 const char *applet = NULL;
+static RC_STRINGLIST *main_hotplugged_services;
+static RC_STRINGLIST *main_stop_services;
+static RC_STRINGLIST *main_start_services;
+static RC_STRINGLIST *main_types_nw;
+static RC_STRINGLIST *main_types_nwua;
+static RC_DEPTREE *main_deptree;
 static char *runlevel;
 static RC_HOOK hook_out;
 
@@ -119,10 +133,8 @@ clean_failed(void)
 static void
 cleanup(void)
 {
-#ifdef DEBUG_MEMORY
 	RC_PID *p1 = LIST_FIRST(&service_pids);
 	RC_PID *p2;
-#endif
 
 	if (!rc_in_logger && !rc_in_plugin &&
 	    applet && (strcmp(applet, "rc") == 0 || strcmp(applet, "openrc") == 0))
@@ -144,21 +156,19 @@ cleanup(void)
 		rc_logger_close();
 	}
 
-#ifdef DEBUG_MEMORY
 	while (p1) {
 		p2 = LIST_NEXT(p1, entries);
 		free(p1);
 		p1 = p2;
 	}
 
-	rc_stringlist_free(hotplugged_services);
-	rc_stringlist_free(stop_services);
-	rc_stringlist_free(start_services);
-	rc_stringlist_free(types_n);
-	rc_stringlist_free(types_nua);
-	rc_deptree_free(deptree);
+	rc_stringlist_free(main_hotplugged_services);
+	rc_stringlist_free(main_stop_services);
+	rc_stringlist_free(main_start_services);
+	rc_stringlist_free(main_types_nw);
+	rc_stringlist_free(main_types_nwua);
+	rc_deptree_free(main_deptree);
 	free(runlevel);
-#endif
 }
 
 static char
@@ -275,9 +285,8 @@ open_shell(void)
 #ifdef __linux__
 	const char *sys = rc_sys();
 
-	/* VSERVER and OPENVZ systems cannot really drop to shells */
-	if (sys &&
-	    (strcmp(sys, "VSERVER") == 0 || strcmp(sys, "OPENVZ") == 0))
+	/* VSERVER systems cannot really drop to shells */
+	if (sys && strcmp(sys, RC_SYS_VSERVER) == 0)
 	{
 		execl("/sbin/halt", "/sbin/halt", "-f", (char *) NULL);
 		eerrorx("%s: unable to exec `/sbin/halt': %s",
@@ -518,7 +527,7 @@ runlevel_config(const char *service, const char *level)
 }
 
 static void
-do_stop_services(const RC_STRINGLIST *types_n, const RC_STRINGLIST *start_services,
+do_stop_services(RC_STRINGLIST *types_nw, RC_STRINGLIST *start_services,
 				 const RC_STRINGLIST *stop_services, const RC_DEPTREE *deptree,
 				 const char *newlevel, bool parallel, bool going_down)
 {
@@ -529,9 +538,10 @@ do_stop_services(const RC_STRINGLIST *types_n, const RC_STRINGLIST *start_servic
 	RC_STRINGLIST *nostop;
 	bool crashed, nstop;
 
-	if (!types_n) {
-		types_n = rc_stringlist_new();
-		rc_stringlist_add(types_n, "needsme");
+	if (!types_nw) {
+		types_nw = rc_stringlist_new();
+		rc_stringlist_add(types_nw, "needsme");
+		rc_stringlist_add(types_nw, "wantsme");
 	}
 
 	crashed = rc_conf_yesno("rc_crashed_stop");
@@ -590,7 +600,7 @@ do_stop_services(const RC_STRINGLIST *types_n, const RC_STRINGLIST *start_servic
 		if (!svc1) {
 			tmplist = rc_stringlist_new();
 			rc_stringlist_add(tmplist, service->value);
-			deporder = rc_deptree_depends(deptree, types_n,
+			deporder = rc_deptree_depends(deptree, types_nw,
 			    tmplist, newlevel ? newlevel : runlevel,
 			    RC_DEP_STRICT | RC_DEP_TRACE);
 			rc_stringlist_free(tmplist);
@@ -654,7 +664,6 @@ do_start_services(const RC_STRINGLIST *start_services, bool parallel)
 			interactive = want_interactive();
 
 		if (interactive) {
-			parallel = false;
 	interactive_retry:
 			printf("\n");
 			einfo("About to start the service %s",
@@ -722,40 +731,11 @@ handle_bad_signal(int sig)
 }
 #endif
 
-#include "_usage.h"
-#define usagestring ""					\
-    "Usage: openrc [options] [<runlevel>]"
-#define getoptstring "a:no:s:S" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "applet",   1, NULL, 'a' },
-	{ "no-stop", 0, NULL, 'n' },
-	{ "override",    1, NULL, 'o' },
-	{ "service",     1, NULL, 's' },
-	{ "sys",         0, NULL, 'S' },
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"runs the applet specified by the next argument",
-	"do not stop any services",
-	"override the next runlevel to change into\n"
-	"when leaving single user or boot runlevels",
-	"runs the service specified with the rest\nof the arguments",
-	"output the RC system type, if any",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	const char *bootlevel = NULL;
 	char *newlevel = NULL;
-	static RC_STRINGLIST *hotplugged_services;
-	static RC_STRINGLIST *stop_services;
-	static RC_STRINGLIST *start_services;
-	static RC_STRINGLIST *types_n;
-	static RC_STRINGLIST *types_nua;
-	static RC_DEPTREE *deptree;
+	const char *systype = NULL;
 	RC_STRINGLIST *deporder = NULL;
 	RC_STRINGLIST *tmplist;
 	RC_STRING *service;
@@ -785,9 +765,6 @@ main(int argc, char **argv)
 	if (!applet)
 		eerrorx("arguments required");
 
-	/* Run our built in applets. If we ran one, we don't return. */
-	run_applets(argc, argv);
-
 	argc--;
 	argv++;
 
@@ -813,10 +790,6 @@ main(int argc, char **argv)
 		    longopts, (int *) 0)) != -1)
 	{
 		switch (opt) {
-		case 'a':
-			/* Do nothing, actual logic in run_applets, this
-			 * is a placeholder */
-			break;
 		case 'n':
 			nostop = true;
 			break;
@@ -843,15 +816,17 @@ main(int argc, char **argv)
 			eerrorx("%s: %s", applet, strerror(errno));
 			/* NOTREACHED */
 		case 'S':
-			bootlevel = rc_sys();
-			if (bootlevel)
-				printf("%s\n", bootlevel);
+			systype = rc_sys();
+			if (systype)
+				printf("%s\n", systype);
 			exit(EXIT_SUCCESS);
 			/* NOTREACHED */
 		case_RC_COMMON_GETOPT
 		}
 	}
 
+	if (strcmp(applet, "rc") == 0)
+		ewarn("rc is deprecated, please use openrc instead.");
 	newlevel = argv[optind++];
 	/* To make life easier, we only have the shutdown runlevel as
 	 * nothing really needs to know that we're rebooting.
@@ -963,7 +938,7 @@ main(int argc, char **argv)
 	}
 
 	/* Load our deptree */
-	if ((deptree = _rc_deptree_load(0, &regen)) == NULL)
+	if ((main_deptree = _rc_deptree_load(0, &regen)) == NULL)
 		eerrorx("failed to load deptree");
 	if (exists(RC_DEPTREE_SKEWED))
 		ewarn("WARNING: clock skew detected!");
@@ -985,26 +960,27 @@ main(int argc, char **argv)
 	* in the new or current runlevel so we won't actually be stopping
 	* them all.
 	*/
-	stop_services = rc_services_in_state(RC_SERVICE_STARTED);
+	main_stop_services = rc_services_in_state(RC_SERVICE_STARTED);
 	tmplist = rc_services_in_state(RC_SERVICE_INACTIVE);
-	TAILQ_CONCAT(stop_services, tmplist, entries);
+	TAILQ_CONCAT(main_stop_services, tmplist, entries);
 	free(tmplist);
 	tmplist = rc_services_in_state(RC_SERVICE_STARTING);
-	TAILQ_CONCAT(stop_services, tmplist, entries);
+	TAILQ_CONCAT(main_stop_services, tmplist, entries);
 	free(tmplist);
-	if (stop_services)
-		rc_stringlist_sort(&stop_services);
+	if (main_stop_services)
+		rc_stringlist_sort(&main_stop_services);
 
-	types_nua = rc_stringlist_new();
-	rc_stringlist_add(types_nua, "ineed");
-	rc_stringlist_add(types_nua, "iuse");
-	rc_stringlist_add(types_nua, "iafter");
+	main_types_nwua = rc_stringlist_new();
+	rc_stringlist_add(main_types_nwua, "ineed");
+	rc_stringlist_add(main_types_nwua, "iwant");
+	rc_stringlist_add(main_types_nwua, "iuse");
+	rc_stringlist_add(main_types_nwua, "iafter");
 
-	if (stop_services) {
-		tmplist = rc_deptree_depends(deptree, types_nua, stop_services,
+	if (main_stop_services) {
+		tmplist = rc_deptree_depends(main_deptree, main_types_nwua, main_stop_services,
 		    runlevel, depoptions | RC_DEP_STOP);
-		rc_stringlist_free(stop_services);
-		stop_services = tmplist;
+		rc_stringlist_free(main_stop_services);
+		main_stop_services = tmplist;
 	}
 
 	/* Create a list of all services which should be started for the new or
@@ -1012,14 +988,14 @@ main(int argc, char **argv)
 	 * runlevels.  Clearly, some of these will already be started so we
 	 * won't actually be starting them all.
 	 */
-	hotplugged_services = rc_services_in_state(RC_SERVICE_HOTPLUGGED);
-	start_services = rc_services_in_runlevel_stacked(newlevel ?
+	main_hotplugged_services = rc_services_in_state(RC_SERVICE_HOTPLUGGED);
+	main_start_services = rc_services_in_runlevel_stacked(newlevel ?
 	    newlevel : runlevel);
 	if (strcmp(newlevel ? newlevel : runlevel, RC_LEVEL_SHUTDOWN) != 0 &&
 	    strcmp(newlevel ? newlevel : runlevel, RC_LEVEL_SYSINIT) != 0)
 	{
 		tmplist = rc_services_in_runlevel(RC_LEVEL_SYSINIT);
-		TAILQ_CONCAT(start_services, tmplist, entries);
+		TAILQ_CONCAT(main_start_services, tmplist, entries);
 		free(tmplist);
 		/* If we are NOT headed for the single-user runlevel... */
 		if (strcmp(newlevel ? newlevel : runlevel,
@@ -1030,13 +1006,13 @@ main(int argc, char **argv)
 				bootlevel) != 0)
 			{
 				tmplist = rc_services_in_runlevel(bootlevel);
-				TAILQ_CONCAT(start_services, tmplist, entries);
+				TAILQ_CONCAT(main_start_services, tmplist, entries);
 				free(tmplist);
 			}
-			if (hotplugged_services) {
-				TAILQ_FOREACH(service, hotplugged_services,
+			if (main_hotplugged_services) {
+				TAILQ_FOREACH(service, main_hotplugged_services,
 				    entries)
-				    rc_stringlist_addu(start_services,
+				    rc_stringlist_addu(main_start_services,
 					service->value);
 			}
 		}
@@ -1045,8 +1021,8 @@ main(int argc, char **argv)
 	parallel = rc_conf_yesno("rc_parallel");
 
 	/* Now stop the services that shouldn't be running */
-	if (stop_services && !nostop)
-		do_stop_services(types_n, start_services, stop_services, deptree, newlevel, parallel, going_down);
+	if (main_stop_services && !nostop)
+		do_stop_services(main_types_nw, main_start_services, main_stop_services, main_deptree, newlevel, parallel, going_down);
 
 	/* Wait for our services to finish */
 	wait_for_services();
@@ -1078,8 +1054,8 @@ main(int argc, char **argv)
 	hook_out = RC_HOOK_RUNLEVEL_START_OUT;
 
 	/* Re-add our hotplugged services if they stopped */
-	if (hotplugged_services)
-		TAILQ_FOREACH(service, hotplugged_services, entries)
+	if (main_hotplugged_services)
+		TAILQ_FOREACH(service, main_hotplugged_services, entries)
 		    rc_service_mark(service->value, RC_SERVICE_HOTPLUGGED);
 
 #ifdef __linux__
@@ -1095,7 +1071,7 @@ main(int argc, char **argv)
 #endif
 
 	/* If we have a list of services to start then... */
-	if (start_services) {
+	if (main_start_services) {
 		/* Get a list of the chained runlevels which compose the target runlevel */
 		RC_STRINGLIST *runlevel_chain = rc_runlevel_stacks(runlevel);
 
@@ -1108,7 +1084,7 @@ main(int argc, char **argv)
 
 			/* Start those services. */
 			rc_stringlist_sort(&run_services);
-			deporder = rc_deptree_depends(deptree, types_nua, run_services, rlevel->value, depoptions | RC_DEP_START);
+			deporder = rc_deptree_depends(main_deptree, main_types_nwua, run_services, rlevel->value, depoptions | RC_DEP_START);
 			rc_stringlist_free(run_services);
 			run_services = deporder;
 			do_start_services(run_services, parallel);

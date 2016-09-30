@@ -1,31 +1,18 @@
 /*
-  rc-misc.h
-  This is private to us and not for user consumption
+ * rc-misc.h
+ * This is private to us and not for user consumption
 */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #ifndef __RC_MISC_H__
@@ -54,20 +41,6 @@
 #define RC_SVCDIR_STARTED       RC_SVCDIR "/started"
 #define RC_SVCDIR_COLDPLUGGED	RC_SVCDIR "/coldplugged"
 
-_unused static bool exists(const char *pathname)
-{
-	struct stat buf;
-
-	return (stat(pathname, &buf) == 0);
-}
-
-_unused static bool existss(const char *pathname)
-{
-	struct stat buf;
-
-	return (stat(pathname, &buf) == 0 && buf.st_size != 0);
-}
-
 char *rc_conf_value(const char *var);
 bool rc_conf_yesno(const char *var);
 void env_filter(void);
@@ -87,4 +60,13 @@ int is_writable(const char *);
 #define service_stop(service)  exec_service(service, "stop");
 
 int parse_mode(mode_t *, char *);
+
+/* Handy function so we can wrap einfo around our deptree */
+RC_DEPTREE *_rc_deptree_load (int, int *);
+
+/* Test to see if we can see pid 1 or not */
+bool _rc_can_find_pids(void);
+
+RC_SERVICE lookup_service_state(const char *service);
+
 #endif

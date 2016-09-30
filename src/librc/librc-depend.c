@@ -1,35 +1,23 @@
 /*
-   librc-depend
-   rc service dependency and ordering
+ *  librc-depend
+ *  rc service dependency and ordering
    */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/utsname.h>
 
+#include "queue.h"
 #include "librc.h"
 
 #define GENDEP          RC_LIBEXECDIR "/sh/gendepends.sh"
@@ -191,7 +179,9 @@ valid_service(const char *runlevel, const char *service, const char *type)
 
 	if (!runlevel ||
 	    strcmp(type, "ineed") == 0 ||
-	    strcmp(type, "needsme") == 0)
+	    strcmp(type, "needsme") == 0  ||
+	    strcmp(type, "iwant") == 0 ||
+	    strcmp(type, "wantsme") == 0)
 		return true;
 
 	if (rc_service_in_runlevel(service, runlevel))
@@ -542,6 +532,7 @@ rc_deptree_order(const RC_DEPTREE *deptree, const char *runlevel, int options)
 	types = rc_stringlist_new();
 	rc_stringlist_add(types, "ineed");
 	rc_stringlist_add(types, "iuse");
+	rc_stringlist_add(types, "iwant");
 	rc_stringlist_add(types, "iafter");
 	services = rc_deptree_depends(deptree, types, list, runlevel,
 				      RC_DEP_STRICT | RC_DEP_TRACE | options);
@@ -647,6 +638,7 @@ typedef struct deppair
 static const DEPPAIR deppairs[] = {
 	{ "ineed",	"needsme" },
 	{ "iuse",	"usesme" },
+	{ "iwant",	"wantsme" },
 	{ "iafter",	"ibefore" },
 	{ "ibefore",	"iafter" },
 	{ "iprovide",	"providedby" },
@@ -725,14 +717,16 @@ rc_deptree_update_needed(time_t *newest, char *file)
 }
 librc_hidden_def(rc_deptree_update_needed)
 
-/* This is a 6 phase operation
+/* This is a 7 phase operation
    Phase 1 is a shell script which loads each init script and config in turn
    and echos their dependency info to stdout
    Phase 2 takes that and populates a depinfo object with that data
    Phase 3 adds any provided services to the depinfo object
    Phase 4 scans that depinfo object and puts in backlinks
    Phase 5 removes broken before dependencies
-   Phase 6 saves the depinfo object to disk
+   Phase 6 looks for duplicate services indicating a real and virtual service
+   with the same names
+   Phase 7 saves the depinfo object to disk
    */
 bool
 rc_deptree_update(void)
@@ -741,7 +735,7 @@ rc_deptree_update(void)
 	RC_DEPTREE *deptree, *providers;
 	RC_DEPINFO *depinfo = NULL, *depinfo_np, *di;
 	RC_DEPTYPE *deptype = NULL, *dt_np, *dt, *provide;
-	RC_STRINGLIST *config, *types, *sorted, *visited;
+	RC_STRINGLIST *config, *dupes, *types, *sorted, *visited;
 	RC_STRING *s, *s2, *s2_np, *s3, *s4;
 	char *line = NULL;
 	size_t len = 0;
@@ -750,6 +744,7 @@ rc_deptree_update(void)
 	bool retval = true;
 	const char *sys = rc_sys();
 	struct utsname uts;
+	int serrno;
 
 	/* Some init scripts need RC_LIBEXECDIR to source stuff
 	   Ideally we should be setting our full env instead */
@@ -843,6 +838,7 @@ rc_deptree_update(void)
 			/* If we're after something, remove us from the before list */
 			if (strcmp(type, "iafter") == 0 ||
 			    strcmp(type, "ineed") == 0 ||
+			    strcmp(type, "iwant") == 0 ||
 			    strcmp(type, "iuse") == 0) {
 				if ((dt = get_deptype(depinfo, "ibefore")))
 					rc_stringlist_delete(dt->services, depend);
@@ -956,6 +952,7 @@ rc_deptree_update(void)
 	/* Phase 5 - Remove broken before directives */
 	types = rc_stringlist_new();
 	rc_stringlist_add(types, "ineed");
+	rc_stringlist_add(types, "iwant");
 	rc_stringlist_add(types, "iuse");
 	rc_stringlist_add(types, "iafter");
 	TAILQ_FOREACH(depinfo, deptree, entries) {
@@ -1002,7 +999,22 @@ rc_deptree_update(void)
 	}
 	rc_stringlist_free(types);
 
-	/* Phase 6 - save to disk
+	/* Phase 6 - Print errors for duplicate services */
+	dupes = rc_stringlist_new();
+	TAILQ_FOREACH(depinfo, deptree, entries) {
+		serrno = errno;
+		errno = 0;
+		rc_stringlist_addu(dupes,depinfo->service);
+		if (errno == EEXIST) {
+			fprintf(stderr,
+					"Error: %s is the name of a real and virtual service.\n",
+					depinfo->service);
+		}
+		errno = serrno;
+	}
+	rc_stringlist_free(dupes);
+
+	/* Phase 7 - save to disk
 	   Now that we're purely in C, do we need to keep a shell parseable file?
 	   I think yes as then it stays human readable
 	   This works and should be entirely shell parseable provided that depend

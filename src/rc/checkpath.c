@@ -1,32 +1,19 @@
 /*
-  checkpath.c
-  Checks for the existance of a file or directory and creates it
-  if necessary. It can also correct its ownership.
-*/
+ * checkpath.c
+ * Checks for the existance of a file or directory and creates it
+ * if necessary. It can also correct its ownership.
+ */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/types.h>
@@ -42,13 +29,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "rc.h"
 #include "rc-misc.h"
-
-#ifdef HAVE_SELINUX
 #include "rc-selinux.h"
-#endif
+#include "_usage.h"
 
 typedef enum {
 	inode_unknown = 0,
@@ -57,7 +42,32 @@ typedef enum {
 	inode_fifo = 3,
 } inode_t;
 
-extern const char *applet;
+const char *applet = NULL;
+const char *extraopts ="path1 [path2] [...]";
+const char *getoptstring = "dDfFpm:o:W" getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "directory",          0, NULL, 'd'},
+	{ "directory-truncate", 0, NULL, 'D'},
+	{ "file",               0, NULL, 'f'},
+	{ "file-truncate",      0, NULL, 'F'},
+	{ "pipe",               0, NULL, 'p'},
+	{ "mode",               1, NULL, 'm'},
+	{ "owner",              1, NULL, 'o'},
+	{ "writable",           0, NULL, 'W'},
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"Create a directory if not exists",
+	"Create/empty directory",
+	"Create a file if not exists",
+	"Truncate file",
+	"Create a named pipe (FIFO) if not exists",
+	"Mode to check",
+	"Owner to check (user:group)",
+	"Check whether the path is writable or not",
+	longopts_help_COMMON
+};
+const char *usagestring = NULL;
 
 static int do_check(char *path, uid_t uid, gid_t gid, mode_t mode,
 	inode_t type, bool trunc, bool chowner, bool selinux_on)
@@ -68,7 +78,7 @@ static int do_check(char *path, uid_t uid, gid_t gid, mode_t mode,
 	int u;
 
 	memset(&st, 0, sizeof(st));
-	if (stat(path, &st) || trunc) {
+	if (lstat(path, &st) || trunc) {
 		if (type == inode_file) {
 			einfo("%s: creating file", path);
 			if (!mode) /* 664 */
@@ -133,6 +143,14 @@ static int do_check(char *path, uid_t uid, gid_t gid, mode_t mode,
 	}
 
 	if (mode && (st.st_mode & 0777) != mode) {
+		if ((type != inode_dir) && (st.st_nlink > 1)) {
+			eerror("%s: chmod: %s %s", applet, "Too many hard links to", path);
+			return -1;
+		}
+		if (S_ISLNK(st.st_mode)) {
+			eerror("%s: chmod: %s %s", applet, path, " is a symbolic link");
+			return -1;
+		}
 		einfo("%s: correcting mode", path);
 		if (chmod(path, mode)) {
 			eerror("%s: chmod: %s", applet, strerror(errno));
@@ -141,6 +159,14 @@ static int do_check(char *path, uid_t uid, gid_t gid, mode_t mode,
 	}
 
 	if (chowner && (st.st_uid != uid || st.st_gid != gid)) {
+		if ((type != inode_dir) && (st.st_nlink > 1)) {
+			eerror("%s: chown: %s %s", applet, "Too many hard links to", path);
+			return -1;
+		}
+		if (S_ISLNK(st.st_mode)) {
+			eerror("%s: chown: %s %s", applet, path, " is a symbolic link");
+			return -1;
+		}
 		einfo("%s: correcting owner", path);
 		if (chown(path, uid, gid)) {
 			eerror("%s: chown: %s", applet, strerror(errno));
@@ -148,10 +174,8 @@ static int do_check(char *path, uid_t uid, gid_t gid, mode_t mode,
 		}
 	}
 
-#ifdef HAVE_SELINUX
 	if (selinux_on)
 		selinux_util_label(path);
-#endif
 
 	return 0;
 }
@@ -189,34 +213,7 @@ static int parse_owner(struct passwd **user, struct group **group,
 	return retval;
 }
 
-#include "_usage.h"
-#define extraopts "path1 [path2] [...]"
-#define getoptstring "dDfFpm:o:W" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "directory",          0, NULL, 'd'},
-	{ "directory-truncate", 0, NULL, 'D'},
-	{ "file",               0, NULL, 'f'},
-	{ "file-truncate",      0, NULL, 'F'},
-	{ "pipe",               0, NULL, 'p'},
-	{ "mode",               1, NULL, 'm'},
-	{ "owner",              1, NULL, 'o'},
-	{ "writable",           0, NULL, 'W'},
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"Create a directory if not exists",
-	"Create/empty directory",
-	"Create a file if not exists",
-	"Truncate file",
-	"Create a named pipe (FIFO) if not exists",
-	"Mode to check",
-	"Owner to check (user:group)",
-	"Check whether the path is writable or not",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
-int checkpath(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	int opt;
 	uid_t uid = geteuid();
@@ -231,6 +228,7 @@ int checkpath(int argc, char **argv)
 	bool writable = false;
 	bool selinux_on = false;
 
+	applet = basename_c(argv[0]);
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *) 0)) != -1)
 	{
@@ -280,10 +278,8 @@ int checkpath(int argc, char **argv)
 	if (gr)
 		gid = gr->gr_gid;
 
-#ifdef HAVE_SELINUX
 	if (selinux_util_open() == 1)
 		selinux_on = true;
-#endif
 
 	while (optind < argc) {
 		if (writable)
@@ -293,10 +289,8 @@ int checkpath(int argc, char **argv)
 		optind++;
 	}
 
-#ifdef HAVE_SELINUX
 	if (selinux_on)
 		selinux_util_close();
-#endif
 
 	return retval;
 }

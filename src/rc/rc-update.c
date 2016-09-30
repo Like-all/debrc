@@ -1,31 +1,18 @@
 /*
-  rc-update
-  Manage init scripts and runlevels
-*/
+ * rc-update
+ * Manage init scripts and runlevels
+ */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <errno.h>
@@ -37,12 +24,31 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
 
-extern const char *applet;
+const char *applet = NULL;
+const char *extraopts = NULL;
+const char *usagestring = ""							\
+	"Usage: rc-update [options] add <service> [<runlevel>...]\n"	\
+	"   or: rc-update [options] del <service> [<runlevel>...]\n"	\
+	"   or: rc-update [options] [show [<runlevel>...]]";
+const char *getoptstring = "asu" getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "all",             0, NULL, 'a' },
+	{ "stack",           0, NULL, 's' },
+	{ "update",          0, NULL, 'u' },
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"Process all runlevels",
+	"Stack a runlevel instead of a service",
+	"Force an update of the dependency tree",
+	longopts_help_COMMON
+};
 
 /* Return the number of changes made:
  *  -1 = no changes (error)
@@ -194,32 +200,11 @@ show(RC_STRINGLIST *runlevels, bool verbose)
 	rc_stringlist_free (services);
 }
 
-#include "_usage.h"
-#define usagestring ""							\
-	"Usage: rc-update [options] add <service> [<runlevel>...]\n"	\
-	"   or: rc-update [options] del <service> [<runlevel>...]\n"	\
-	"   or: rc-update [options] [show [<runlevel>...]]"
-#define getoptstring "asu" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "all",             0, NULL, 'a' },
-	{ "stack",           0, NULL, 's' },
-	{ "update",          0, NULL, 'u' },
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"Process all runlevels",
-	"Stack a runlevel instead of a service",
-	"Force an update of the dependency tree",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
 #define DOADD    (1 << 1)
 #define DODELETE (1 << 2)
 #define DOSHOW   (1 << 3)
 
-int
-rc_update(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	RC_DEPTREE *deptree;
 	RC_STRINGLIST *runlevels;
@@ -234,6 +219,7 @@ rc_update(int argc, char **argv)
 	int (*actfunc)(const char *, const char *);
 	int ret;
 
+	applet = basename_c(argv[0]);
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *)0)) != -1)
 		switch (opt) {

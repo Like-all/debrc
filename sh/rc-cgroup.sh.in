@@ -1,7 +1,16 @@
 #!@SHELL@
-# Copyright (c) 2012 Alexander Vershilov <qnikst@gentoo.org>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2012-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+#    except according to the terms contained in the LICENSE file.
+
 extra_stopped_commands="${extra_stopped_commands} cgroup_cleanup"
+description_cgroup_cleanup="Kill all processes in the cgroup"
 
 cgroup_find_path()
 {
@@ -44,27 +53,29 @@ cgroup_set_values()
 	while [ -n "$1" -a "$controller" != "cpuacct" ]; do
 		case "$1" in
 			$controller.*)
-				if [ -n "$name" -a -f "$cgroup/$name" -a -n "$val" ]; then
+				if [ -n "$name" -a -w "$cgroup/$name" -a -n "$val" ]; then
 					veinfo "$RC_SVCNAME: Setting $cgroup/$name to $val"
-					echo $val > "$cgroup/$name"
+					printf "%s" "$val" > "$cgroup/$name"
 				fi
 				name=$1
 				val=
 				;;
 			*)
-				val="$val $1"
+				[ -n "$val" ] &&
+					val="$val $1" ||
+					val="$1"
 				;;
 		esac
 		shift
 	done
-	if [ -n "$name" -a -f "$cgroup/$name" -a -n "$val" ]; then
+	if [ -n "$name" -a -w "$cgroup/$name" -a -n "$val" ]; then
 		veinfo "$RC_SVCNAME: Setting $cgroup/$name to $val"
-		echo $val > "$cgroup/$name"
+		printf "%s" "$val" > "$cgroup/$name"
 	fi
 
-	if [ -f "$cgroup/tasks" ]; then
+	if [ -w "$cgroup/tasks" ]; then
 		veinfo "$RC_SVCNAME: adding to $cgroup/tasks"
-		echo 0 > "$cgroup/tasks"
+		printf "%d" 0 > "$cgroup/tasks"
 	fi
 
 	return 0
@@ -77,14 +88,14 @@ cgroup_add_service()
     # cgroups. But may lead to a problems where that inheriting
     # is needed.
 	for d in /sys/fs/cgroup/* ; do
-		[ -f "${d}"/tasks ] && echo 0 > "${d}"/tasks
+		[ -w "${d}"/tasks ] && printf "%d" 0 > "${d}"/tasks
 	done
 
 	openrc_cgroup=/sys/fs/cgroup/openrc
 	if [ -d "$openrc_cgroup" ]; then
 		cgroup="$openrc_cgroup/$RC_SVCNAME"
 		mkdir -p "$cgroup"
-		[ -f "$cgroup/tasks" ] && echo 0 > "$cgroup/tasks"
+		[ -w "$cgroup/tasks" ] && printf "%d" 0 > "$cgroup/tasks"
 	fi
 }
 
@@ -105,11 +116,20 @@ cgroup_set_limits()
 	local devices="${rc_cgroup_devices:-$RC_CGROUP_DEVICES}"
 	[ -n "$devices" ] && cgroup_set_values devices "$devices"
 
+	local hugetlb="${rc_cgroup_hugetlb:-$RC_CGROUP_HUGETLB}"
+	[ -n "$hugetlb" ] && cgroup_set_values hugetlb "$hugetlb"
+
 	local memory="${rc_cgroup_memory:-$RC_CGROUP_MEMORY}"
 	[ -n "$memory" ] && cgroup_set_values memory "$memory"
 
+	local net_cls="${rc_cgroup_net_cls:-$RC_CGROUP_NET_CLS}"
+	[ -n "$net_cls" ] && cgroup_set_values net_cls "$net_cls"
+
 	local net_prio="${rc_cgroup_net_prio:-$RC_CGROUP_NET_PRIO}"
 	[ -n "$net_prio" ] && cgroup_set_values net_prio "$net_prio"
+
+	local pids="${rc_cgroup_pids:-$RC_CGROUP_PIDS}"
+	[ -n "$pids" ] && cgroup_set_values pids "$pids"
 
 	return 0
 }

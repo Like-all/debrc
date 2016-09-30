@@ -1,35 +1,22 @@
 /*
   start-stop-daemon
-  Starts, stops, tests and signals daemons
-
-  This is essentially a ground up re-write of Debians
-  start-stop-daemon for cleaner code and to integrate into our RC
-  system so we can monitor daemons a little.
-*/
+ * Starts, stops, tests and signals daemons
+ *
+ * This is essentially a ground up re-write of Debians
+ * start-stop-daemon for cleaner code and to integrate into our RC
+ * system so we can monitor daemons a little.
+ */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 /* nano seconds */
@@ -72,19 +59,75 @@
 static struct pam_conv conv = { NULL, NULL};
 #endif
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
 
-/* Some libc implementations don't define this */
-#ifndef LIST_FOREACH_SAFE
-#define	LIST_FOREACH_SAFE(var, head, field, tvar)			      \
-	for ((var) = LIST_FIRST((head));				      \
-	     (var) && ((tvar) = LIST_NEXT((var), field), 1);		      \
-	     (var) = (tvar))
-#endif
-
+const char *applet = NULL;
+const char *extraopts = NULL;
+const char *getoptstring = "I:KN:PR:Sa:bc:d:e:g:ik:mn:op:s:tu:r:w:x:1:2:" \
+	getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "ionice",       1, NULL, 'I'},
+	{ "stop",         0, NULL, 'K'},
+	{ "nicelevel",    1, NULL, 'N'},
+	{ "retry",        1, NULL, 'R'},
+	{ "start",        0, NULL, 'S'},
+	{ "startas",      1, NULL, 'a'},
+	{ "background",   0, NULL, 'b'},
+	{ "chuid",        1, NULL, 'c'},
+	{ "chdir",        1, NULL, 'd'},
+	{ "env",          1, NULL, 'e'},
+	{ "umask",        1, NULL, 'k'},
+	{ "group",        1, NULL, 'g'},
+	{ "interpreted",  0, NULL, 'i'},
+	{ "make-pidfile", 0, NULL, 'm'},
+	{ "name",         1, NULL, 'n'},
+	{ "oknodo",       0, NULL, 'o'},
+	{ "pidfile",      1, NULL, 'p'},
+	{ "signal",       1, NULL, 's'},
+	{ "test",         0, NULL, 't'},
+	{ "user",         1, NULL, 'u'},
+	{ "chroot",       1, NULL, 'r'},
+	{ "wait",         1, NULL, 'w'},
+	{ "exec",         1, NULL, 'x'},
+	{ "stdout",       1, NULL, '1'},
+	{ "stderr",       1, NULL, '2'},
+	{ "progress",     0, NULL, 'P'},
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"Set an ionice class:data when starting",
+	"Stop daemon",
+	"Set a nicelevel when starting",
+	"Retry schedule to use when stopping",
+	"Start daemon",
+	"deprecated, use --exec or --name",
+	"Force daemon to background",
+	"deprecated, use --user",
+	"Change the PWD",
+	"Set an environment string",
+	"Set the umask for the daemon",
+	"Change the process group",
+	"Match process name by interpreter",
+	"Create a pidfile",
+	"Match process name",
+	"deprecated",
+	"Match pid found in this file",
+	"Send a different signal",
+	"Test actions, don't do them",
+	"Change the process user",
+	"Chroot to this directory",
+	"Milliseconds to wait for daemon start",
+	"Binary to start/stop",
+	"Redirect stdout to file",
+	"Redirect stderr to file",
+	"Print dots each second while waiting",
+	longopts_help_COMMON
+};
+const char *usagestring = NULL;
 
 typedef struct scheduleitem
 {
@@ -102,7 +145,6 @@ typedef struct scheduleitem
 TAILQ_HEAD(, scheduleitem) schedule;
 static char **nav;
 
-extern const char *applet;
 static char *changeuser, *ch_root, *ch_dir;
 
 extern char **environ;
@@ -135,7 +177,6 @@ free_schedulelist(void)
 	TAILQ_INIT(&schedule);
 }
 
-#ifdef DEBUG_MEMORY
 static void
 cleanup(void)
 {
@@ -143,7 +184,6 @@ cleanup(void)
 	free(nav);
 	free_schedulelist();
 }
-#endif
 
 static int
 parse_signal(const char *sig)
@@ -588,70 +628,7 @@ expand_home(const char *home, const char *path)
 	return nh;
 }
 
-#include "_usage.h"
-#define getoptstring "I:KN:PR:Sa:bc:d:e:g:ik:mn:op:s:tu:r:w:x:1:2:" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "ionice",       1, NULL, 'I'},
-	{ "stop",         0, NULL, 'K'},
-	{ "nicelevel",    1, NULL, 'N'},
-	{ "retry",        1, NULL, 'R'},
-	{ "start",        0, NULL, 'S'},
-	{ "startas",      1, NULL, 'a'},
-	{ "background",   0, NULL, 'b'},
-	{ "chuid",        1, NULL, 'c'},
-	{ "chdir",        1, NULL, 'd'},
-	{ "env",          1, NULL, 'e'},
-	{ "umask",        1, NULL, 'k'},
-	{ "group",        1, NULL, 'g'},
-	{ "interpreted",  0, NULL, 'i'},
-	{ "make-pidfile", 0, NULL, 'm'},
-	{ "name",         1, NULL, 'n'},
-	{ "oknodo",       0, NULL, 'o'},
-	{ "pidfile",      1, NULL, 'p'},
-	{ "signal",       1, NULL, 's'},
-	{ "test",         0, NULL, 't'},
-	{ "user",         1, NULL, 'u'},
-	{ "chroot",       1, NULL, 'r'},
-	{ "wait",         1, NULL, 'w'},
-	{ "exec",         1, NULL, 'x'},
-	{ "stdout",       1, NULL, '1'},
-	{ "stderr",       1, NULL, '2'},
-	{ "progress",     0, NULL, 'P'},
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"Set an ionice class:data when starting",
-	"Stop daemon",
-	"Set a nicelevel when starting",
-	"Retry schedule to use when stopping",
-	"Start daemon",
-	"deprecated, use --exec or --name",
-	"Force daemon to background",
-	"deprecated, use --user",
-	"Change the PWD",
-	"Set an environment string",
-	"Set the umask for the daemon",
-	"Change the process group",
-	"Match process name by interpreter",
-	"Create a pidfile",
-	"Match process name",
-	"deprecated",
-	"Match pid found in this file",
-	"Send a different signal",
-	"Test actions, don't do them",
-	"Change the process user",
-	"Chroot to this directory",
-	"Milliseconds to wait for daemon start",
-	"Binary to start/stop",
-	"Redirect stdout to file",
-	"Redirect stderr to file",
-	"Print dots each second while waiting",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
-int
-start_stop_daemon(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	int devnull_fd = -1;
 #ifdef TIOCNOTTY
@@ -686,6 +663,7 @@ start_stop_daemon(int argc, char **argv)
 	int tid = 0;
 	char *redirect_stderr = NULL;
 	char *redirect_stdout = NULL;
+	int stdin_fd;
 	int stdout_fd;
 	int stderr_fd;
 	pid_t pid, spid;
@@ -706,10 +684,9 @@ start_stop_daemon(int argc, char **argv)
 	char **margv;
 	unsigned int start_wait = 0;
 
+	applet = basename_c(argv[0]);
 	TAILQ_INIT(&schedule);
-#ifdef DEBUG_MEMORY
 	atexit(cleanup);
-#endif
 
 	signal_setup(SIGINT, handle_signal);
 	signal_setup(SIGQUIT, handle_signal);
@@ -719,6 +696,17 @@ start_stop_daemon(int argc, char **argv)
 		if (sscanf(tmp, "%d", &nicelevel) != 1)
 			eerror("%s: invalid nice level `%s' (SSD_NICELEVEL)",
 			    applet, tmp);
+		if ((tmp = getenv("SSD_IONICELEVEL"))) {
+			int n = sscanf(tmp, "%d:%d", &ionicec, &ioniced);
+			if (n != 1 && n != 2)
+				eerror("%s: invalid ionice level `%s' (SSD_IONICELEVEL)",
+				    applet, tmp);
+			if (ionicec == 0)
+				ioniced = 0;
+			else if (ionicec == 3)
+				ioniced = 7;
+			ionicec <<= 13; /* class shift */
+		}
 
 	/* Get our user name and initial dir */
 	p = getenv("USER");
@@ -927,10 +915,13 @@ start_stop_daemon(int argc, char **argv)
 			exec = name;
 		if (name && start)
 			*argv = name;
-	} else if (name)
+	} else if (name) {
 		*--argv = name;
-	else if (exec)
+		++argc;
+    } else if (exec) {
 		*--argv = exec;
+		++argc;
+	};
 
 	if (stop || sig != -1) {
 		if (sig == -1)
@@ -1083,7 +1074,7 @@ start_stop_daemon(int argc, char **argv)
 			exit (EXIT_SUCCESS);
 
 		einfon("Would start");
-		while (argc-- >= 0)
+		while (argc-- > 0)
 			printf(" %s", *argv++);
 		printf("\n");
 		eindent();
@@ -1215,7 +1206,8 @@ start_stop_daemon(int argc, char **argv)
 			if ((strncmp(env->value, "RC_", 3) == 0 &&
 				strncmp(env->value, "RC_SERVICE=", 10) != 0 &&
 				strncmp(env->value, "RC_SVCNAME=", 10) != 0) ||
-			    strncmp(env->value, "SSD_NICELEVEL=", 14) == 0)
+				strncmp(env->value, "SSD_NICELEVEL=", 14) == 0 ||
+				strncmp(env->value, "SSD_IONICELEVEL=", 16) == 0)
 			{
 				p = strchr(env->value, '=');
 				*p = '\0';
@@ -1252,12 +1244,13 @@ start_stop_daemon(int argc, char **argv)
 			setenv("PATH", newpath, 1);
 		}
 
+		stdin_fd = devnull_fd;
 		stdout_fd = devnull_fd;
 		stderr_fd = devnull_fd;
 		if (redirect_stdout) {
 			if ((stdout_fd = open(redirect_stdout,
 				    O_WRONLY | O_CREAT | O_APPEND,
-				    S_IRUSR | S_IWUSR)) == -1)
+				    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == -1)
 				eerrorx("%s: unable to open the logfile"
 				    " for stdout `%s': %s",
 				    applet, redirect_stdout, strerror(errno));
@@ -1265,13 +1258,14 @@ start_stop_daemon(int argc, char **argv)
 		if (redirect_stderr) {
 			if ((stderr_fd = open(redirect_stderr,
 				    O_WRONLY | O_CREAT | O_APPEND,
-				    S_IRUSR | S_IWUSR)) == -1)
+				    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == -1)
 				eerrorx("%s: unable to open the logfile"
 				    " for stderr `%s': %s",
 				    applet, redirect_stderr, strerror(errno));
 		}
 
-		/* We don't redirect stdin as some daemons may need it */
+		if (background)
+			dup2(stdin_fd, STDIN_FILENO);
 		if (background || redirect_stdout || rc_yesno(getenv("EINFO_QUIET")))
 			dup2(stdout_fd, STDOUT_FILENO);
 		if (background || redirect_stderr || rc_yesno(getenv("EINFO_QUIET")))

@@ -1,31 +1,18 @@
 /*
-  fstabinfo.c
-  Gets information about /etc/fstab.
-*/
+ * fstabinfo.c
+ * Gets information about /etc/fstab.
+ */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/wait.h>
@@ -68,10 +55,36 @@
 #  define ENT_PASS(_ent) ent->fs_passno
 #endif
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
+
+const char *applet = NULL;
+const char *extraopts = NULL;
+const char *getoptstring = "MRbmop:t:" getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "mount",          0, NULL, 'M' },
+	{ "remount",        0, NULL, 'R' },
+	{ "blockdevice",    0, NULL, 'b' },
+	{ "mountargs",      0, NULL, 'm' },
+	{ "options",        0, NULL, 'o' },
+	{ "passno",         1, NULL, 'p' },
+	{ "fstype",         1, NULL, 't' },
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"Mounts the filesytem from the mountpoint",
+	"Remounts the filesystem based on the information in fstab",
+	"Extract the block device",
+	"Show arguments needed to mount the entry",
+	"Extract the options field",
+	"Extract or query the pass number field",
+	"List entries with matching file system type",
+	longopts_help_COMMON
+};
+const char *usagestring = NULL;
 
 #ifdef HAVE_GETMNTENT
 static struct mntent *
@@ -141,30 +154,6 @@ do_mount(struct ENT *ent, bool remount)
 	}
 }
 
-#include "_usage.h"
-#define getoptstring "MRbmop:t:" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "mount",          0, NULL, 'M' },
-	{ "remount",        0, NULL, 'R' },
-	{ "blockdevice",    0, NULL, 'b' },
-	{ "mountargs",      0, NULL, 'm' },
-	{ "options",        0, NULL, 'o' },
-	{ "passno",         1, NULL, 'p' },
-	{ "fstype",         1, NULL, 't' },
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"Mounts the filesytem from the mountpoint",
-	"Remounts the filesystem based on the information in fstab",
-	"Extract the block device",
-	"Show arguments needed to mount the entry",
-	"Extract the options field",
-	"Extract or query the pass number field",
-	"List entries with matching file system type",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
 #define OUTPUT_FILE      (1 << 1)
 #define OUTPUT_MOUNTARGS (1 << 2)
 #define OUTPUT_OPTIONS   (1 << 3)
@@ -173,8 +162,7 @@ static const char * const longopts_help[] = {
 #define OUTPUT_MOUNT     (1 << 6)
 #define OUTPUT_REMOUNT   (1 << 7)
 
-int
-fstabinfo(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	struct ENT *ent;
 	int result = EXIT_SUCCESS;
@@ -190,9 +178,13 @@ fstabinfo(int argc, char **argv)
 	FILE *fp;
 #endif
 
+	/* fail if there is no /etc/fstab */
+	if (!exists("/etc/fstab"))
+		eerrorx("/etc/fstab does not exist");
 	/* Ensure that we are only quiet when explicitly told to be */
 	unsetenv("EINFO_QUIET");
 
+	applet = basename_c(argv[0]);
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *) 0)) != -1)
 	{

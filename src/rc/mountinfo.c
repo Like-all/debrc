@@ -1,31 +1,18 @@
 /*
-  mountinfo.c
-  Obtains information about mounted filesystems.
-*/
+ * mountinfo.c
+ * Obtains information about mounted filesystems.
+ */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/types.h>
@@ -35,11 +22,12 @@
 #  include <sys/ucred.h>
 #  include <sys/mount.h>
 #  define F_FLAGS f_flags
-#elif defined(BSD)
+#elif defined(BSD) && !defined(__GNU__)
 #  include <sys/statvfs.h>
 #  define statfs statvfs
 #  define F_FLAGS f_flag
-#elif defined (__linux__) || defined (__GLIBC__)
+#elif defined(__linux__) || (defined(__FreeBSD_kernel__) && \
+	defined(__GLIBC__)) || defined(__GNU__)
 #  include <mntent.h>
 #endif
 
@@ -51,12 +39,48 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
 
-extern const char *applet;
+const char *applet = NULL;
+const char *extraopts = "[mount1] [mount2] ...";
+const char *getoptstring = "f:F:n:N:o:O:p:P:iste:E:" getoptstring_COMMON;
+const struct option longopts[] = {
+	{ "fstype-regex",        1, NULL, 'f'},
+	{ "skip-fstype-regex",   1, NULL, 'F'},
+	{ "node-regex",          1, NULL, 'n'},
+	{ "skip-node-regex",     1, NULL, 'N'},
+	{ "options-regex",       1, NULL, 'o'},
+	{ "skip-options-regex",  1, NULL, 'O'},
+	{ "point-regex",         1, NULL, 'p'},
+	{ "skip-point-regex",    1, NULL, 'P'},
+	{ "options",             0, NULL, 'i'},
+	{ "fstype",              0, NULL, 's'},
+	{ "node",                0, NULL, 't'},
+	{ "netdev",              0, NULL, 'e'},
+	{ "nonetdev",            0, NULL, 'E'},
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"fstype regex to find",
+	"fstype regex to skip",
+	"node regex to find",
+	"node regex to skip",
+	"options regex to find",
+	"options regex to skip",
+	"point regex to find",
+	"point regex to skip",
+	"print options",
+	"print fstype",
+	"print node",
+	"is it a network device",
+	"is it not a network device",
+	longopts_help_COMMON
+};
+const char *usagestring = NULL;
 
 typedef enum {
 	mount_from,
@@ -168,7 +192,7 @@ process_mount(RC_STRINGLIST *list, struct args *args,
 	return -1;
 }
 
-#ifdef BSD
+#if defined(BSD) && !defined(__GNU__)
 
 /* Translate the mounted options to english
  * This is taken directly from FreeBSD mount.c */
@@ -265,12 +289,16 @@ find_mounts(struct args *args)
 	return list;
 }
 
-#elif defined (__linux__) || defined (__GLIBC__)
+#elif defined(__linux__) || (defined(__FreeBSD_kernel__) && \
+	defined(__GLIBC__)) || defined(__GNU__)
 static struct mntent *
 getmntfile(const char *file)
 {
 	struct mntent *ent = NULL;
 	FILE *fp;
+
+	if (!exists("/etc/fstab"))
+		return NULL;
 
 	fp = setmntent("/etc/fstab", "r");
 	while ((ent = getmntent(fp)))
@@ -295,7 +323,7 @@ find_mounts(struct args *args)
 	int netdev;
 	RC_STRINGLIST *list;
 
-	if ((fp = fopen("/proc/mounts", "r")) == NULL)
+	if ((fp = fopen("/proc/self/mounts", "r")) == NULL)
 		eerrorx("getmntinfo: %s", strerror(errno));
 
 	list = rc_stringlist_new();
@@ -312,6 +340,8 @@ find_mounts(struct args *args)
 		if ((ent = getmntfile(to))) {
 			if (strstr(ent->mnt_opts, "_netdev"))
 				netdev = 0;
+			else
+				netdev = 1;
 		}
 
 		process_mount(list, args, from, to, fst, opts, netdev);
@@ -342,45 +372,7 @@ get_regex(const char *string)
 	return reg;
 }
 
-#include "_usage.h"
-#define extraopts "[mount1] [mount2] ..."
-#define getoptstring "f:F:n:N:o:O:p:P:ist" getoptstring_COMMON
-static const struct option longopts[] = {
-	{ "fstype-regex",        1, NULL, 'f'},
-	{ "skip-fstype-regex",   1, NULL, 'F'},
-	{ "node-regex",          1, NULL, 'n'},
-	{ "skip-node-regex",     1, NULL, 'N'},
-	{ "options-regex",       1, NULL, 'o'},
-	{ "skip-options-regex",  1, NULL, 'O'},
-	{ "point-regex",         1, NULL, 'p'},
-	{ "skip-point-regex",    1, NULL, 'P'},
-	{ "options",             0, NULL, 'i'},
-	{ "fstype",              0, NULL, 's'},
-	{ "node",                0, NULL, 't'},
-	{ "netdev",              0, NULL, 'e'},
-	{ "nonetdev",            0, NULL, 'E'},
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"fstype regex to find",
-	"fstype regex to skip",
-	"node regex to find",
-	"node regex to skip",
-	"options regex to find",
-	"options regex to skip",
-	"point regex to find",
-	"point regex to skip",
-	"print options",
-	"print fstype",
-	"print node",
-	"is it a network device",
-	"is it not a network device",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
-int
-mountinfo(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	struct args args;
 	regex_t *point_regex = NULL;
@@ -398,6 +390,7 @@ mountinfo(int argc, char **argv)
 #define REG_FREE(_var)							      \
 	if (_var) { regfree(_var); free(_var); }
 
+	applet = basename_c(argv[0]);
 	memset (&args, 0, sizeof(args));
 	args.mount_type = mount_to;
 	args.netdev = net_ignore;

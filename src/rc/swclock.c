@@ -1,34 +1,21 @@
 /*
-  swclock.c
-  Sets the system time from the mtime of the given file.
-  This is useful for systems who do not have a working RTC and rely on ntp.
-  OpenRC relies on the correct system time for a lot of operations so this is needed
-  quite early.
-*/
+ * swclock.c
+ * Sets the system time from the mtime of the given file.
+ * This is useful for systems who do not have a working RTC and rely on ntp.
+ * OpenRC relies on the correct system time for a lot of operations
+ * so this is needed quite early.
+ */
 
 /*
- * Copyright (c) 2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/time.h>
@@ -38,40 +25,40 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <utime.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
 
 #define RC_SHUTDOWNTIME    RC_SVCDIR "/shutdowntime"
 
-extern const char *applet;
-
-#include "_usage.h"
-#define extraopts "file"
-#define getoptstring "sw" getoptstring_COMMON
-static const struct option longopts[] = {
+const char *applet = NULL;
+const char *extraopts = "file";
+const char *getoptstring = "sw" getoptstring_COMMON;
+const struct option longopts[] = {
 	{ "save", 0, NULL, 's' },
 	{ "warn", 0, NULL, 'w' },
 	longopts_COMMON
 };
-static const char * const longopts_help[] = {
+const char * const longopts_help[] = {
 	"saves the time",
 	"no error if no reference file",
 	longopts_help_COMMON
 };
-#include "_usage.c"
+const char *usagestring = NULL;
 
-int
-swclock(int argc, char **argv)
+int main(int argc, char **argv)
 {
 	int opt, sflag = 0, wflag = 0;
 	const char *file = RC_SHUTDOWNTIME;
 	struct stat sb;
 	struct timeval tv;
 
+	applet = basename_c(argv[0]);
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *) 0)) != -1)
 	{

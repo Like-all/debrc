@@ -1,31 +1,18 @@
 /*
-  librc-misc.c
-  rc misc functions
-*/
+ * rc-misc.c
+ * rc misc functions
+ */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <sys/file.h>
@@ -34,9 +21,9 @@
 
 #ifdef __linux__
 #  include <sys/sysinfo.h>
-#  include <regex.h>
 #endif
 
+#include <sys/time.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -44,9 +31,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+#include <utime.h>
 
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
 #include "version.h"
@@ -60,11 +50,10 @@ rc_conf_yesno(const char *setting)
 }
 
 static const char *const env_whitelist[] = {
-	"CONSOLE", "PATH", "SHELL", "USER", "HOME", "TERM",
-	"LANG", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE",
-	"LC_MONETARY", "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS",
-	"LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION", "LC_ALL",
-	"IN_HOTPLUG", "IN_BACKGROUND", "RC_INTERFACE_KEEP_CONFIG",
+	"EERROR_QUIET", "EINFO_QUIET",
+	"IN_BACKGROUND", "IN_HOTPLUG",
+	"LANG", "LC_MESSAGES", "TERM",
+	"EINFO_COLOR", "EINFO_VERBOSE",
 	NULL
 };
 
@@ -80,6 +69,12 @@ env_filter(void)
 
 	/* Add the user defined list of vars */
 	env_allow = rc_stringlist_split(rc_conf_value("rc_env_allow"), " ");
+	/*
+	 * If '*' is an entry in rc_env_allow, do nothing as we are to pass
+	 * through all environment variables.
+	 */
+	if (rc_stringlist_find(env_allow, "*"))
+		return;
 	profile = rc_config_load(RC_PROFILE_ENV);
 
 	/* Copy the env and work from this so we can manipulate it safely */
@@ -116,11 +111,9 @@ env_filter(void)
 			setenv(env->value, e + 1, 1);
 	}
 
-#ifdef DEBUG_MEMORY
 	rc_stringlist_free(env_list);
 	rc_stringlist_free(env_allow);
 	rc_stringlist_free(profile);
-#endif
 }
 
 void
@@ -342,5 +335,109 @@ is_writable(const char *path)
 	if (access(path, W_OK) == 0)
 		return 1;
 
+	return 0;
+}
+
+RC_DEPTREE * _rc_deptree_load(int force, int *regen)
+{
+	int fd;
+	int retval;
+	int serrno = errno;
+	int merrno;
+	time_t t;
+	char file[PATH_MAX];
+	struct stat st;
+	struct utimbuf ut;
+	FILE *fp;
+
+	t = 0;
+	if (rc_deptree_update_needed(&t, file) || force != 0) {
+		/* Test if we have permission to update the deptree */
+		fd = open(RC_DEPTREE_CACHE, O_WRONLY);
+		merrno = errno;
+		errno = serrno;
+		if (fd == -1 && merrno == EACCES)
+			return rc_deptree_load();
+		close(fd);
+
+		if (regen)
+			*regen = 1;
+		ebegin("Caching service dependencies");
+		retval = rc_deptree_update() ? 0 : -1;
+		eend (retval, "Failed to update the dependency tree");
+
+		if (retval == 0) {
+			stat(RC_DEPTREE_CACHE, &st);
+			if (st.st_mtime < t) {
+				eerror("Clock skew detected with `%s'", file);
+				eerrorn("Adjusting mtime of `" RC_DEPTREE_CACHE
+				    "' to %s", ctime(&t));
+				fp = fopen(RC_DEPTREE_SKEWED, "w");
+				if (fp != NULL) {
+					fprintf(fp, "%s\n", file);
+					fclose(fp);
+				}
+				ut.actime = t;
+				ut.modtime = t;
+				utime(RC_DEPTREE_CACHE, &ut);
+			} else {
+				if (exists(RC_DEPTREE_SKEWED))
+					unlink(RC_DEPTREE_SKEWED);
+			}
+		}
+		if (force == -1 && regen != NULL)
+			*regen = retval;
+	}
+	return rc_deptree_load();
+}
+
+bool _rc_can_find_pids(void)
+{
+	RC_PIDLIST *pids;
+	RC_PID *pid;
+	RC_PID *pid2;
+	bool retval = false;
+
+	if (geteuid() == 0)
+		return true;
+
+	/* If we cannot see process 1, then we don't test to see if
+	 * services crashed or not */
+	pids = rc_find_pids(NULL, NULL, 0, 1);
+	if (pids) {
+		pid = LIST_FIRST(pids);
+		if (pid) {
+			retval = true;
+			while (pid) {
+				pid2 = LIST_NEXT(pid, entries);
+				free(pid);
+				pid = pid2;
+			}
+		}
+		free(pids);
+	}
+	return retval;
+}
+
+static const struct {
+	const char * const name;
+	RC_SERVICE bit;
+} service_bits[] = {
+	{ "service_started",     RC_SERVICE_STARTED,     },
+	{ "service_stopped",     RC_SERVICE_STOPPED,     },
+	{ "service_inactive",    RC_SERVICE_INACTIVE,    },
+	{ "service_starting",    RC_SERVICE_STARTING,    },
+	{ "service_stopping",    RC_SERVICE_STOPPING,    },
+	{ "service_hotplugged",  RC_SERVICE_HOTPLUGGED,  },
+	{ "service_wasinactive", RC_SERVICE_WASINACTIVE, },
+	{ "service_failed",      RC_SERVICE_FAILED,      },
+};
+
+RC_SERVICE lookup_service_state(const char *service)
+{
+	size_t i;
+	for (i = 0; i < ARRAY_SIZE(service_bits); ++i)
+		if (!strcmp(service, service_bits[i].name))
+			return service_bits[i].bit;
 	return 0;
 }

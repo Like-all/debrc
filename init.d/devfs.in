@@ -1,6 +1,13 @@
 #!@SBINDIR@/openrc-run
-# Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
 
 description="Set up the /dev directory"
 
@@ -8,7 +15,7 @@ depend()
 {
 	provide dev-mount
 	before dev
-	keyword -prefix -vserver -lxc
+	keyword -docker -lxc -prefix -systemd-nspawn -vserver
 }
 
 mount_dev()
@@ -69,7 +76,14 @@ seed_dev()
 	# so udev can add its start-message to dmesg
 	[ -c /dev/kmsg ] || mknod -m 660 /dev/kmsg c 1 11
 
-	# Mount required stuff as user may not have then in /etc/fstab
+	# extra symbolic links not provided by default
+	[ -e /dev/fd ] || ln -snf /proc/self/fd /dev/fd
+	[ -e /dev/stdin ] || ln -snf /proc/self/fd/0 /dev/stdin
+	[ -e /dev/stdout ] || ln -snf /proc/self/fd/1 /dev/stdout
+	[ -e /dev/stderr ] || ln -snf /proc/self/fd/2 /dev/stderr
+	[ -e /proc/kcore ] && ln -snf /proc/kcore /dev/core
+
+	# Mount required directories as user may not have them in /etc/fstab
 	for x in \
 		"mqueue /dev/mqueue 1777 ,nodev mqueue" \
 		"devpts /dev/pts 0755 ,gid=5,mode=0620 devpts" \

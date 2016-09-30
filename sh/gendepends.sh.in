@@ -1,8 +1,15 @@
 #!@SHELL@
 # Shell wrapper to list our dependencies
 
-# Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+#    except according to the terms contained in the LICENSE file.
 
 . @LIBEXECDIR@/sh/functions.sh
 . @LIBEXECDIR@/sh/rc-functions.sh
@@ -16,6 +23,9 @@ need() {
 use() {
 	[ -n "$*" ] && echo "$RC_SVCNAME iuse $*" >&3
 }
+want() {
+	[ -n "$*" ] && echo "$RC_SVCNAME iwant $*" >&3
+}
 before() {
 	[ -n "$*" ] && echo "$RC_SVCNAME ibefore $*" >&3
 }
@@ -26,7 +36,18 @@ provide() {
 	[ -n "$*" ] && echo "$RC_SVCNAME iprovide $*" >&3
 }
 keyword() {
-	[ -n "$*" ] && echo "$RC_SVCNAME keyword $*" >&3
+	local c x
+	set -- $*
+	while [ -n "$*" ]; do
+		case "$1" in
+			-containers) x="$(_get_containers)" ;;
+			!-containers) x="$(_get_containers_remove)" ;;
+			*) x=$1 ;;
+		esac
+		c="${c}${x} "
+		shift
+	done
+	[ -n "$c" ] && echo "$RC_SVCNAME keyword $c" >&3
 }
 depend() {
 	:
@@ -82,6 +103,11 @@ do
 		fi
 
 		[ -e @SYSCONFDIR@/rc.conf ] && . @SYSCONFDIR@/rc.conf
+		if [ -d "@SYSCONFDIR@/rc.conf.d" ]; then
+			for _f in "@SYSCONFDIR@"/rc.conf.d/*.conf; do
+				[ -e "$_f" ] && . "$_f"
+			done
+		fi
 
 		if . "$_dir/$RC_SVCNAME"; then
 			echo "$RC_SVCNAME" >&3

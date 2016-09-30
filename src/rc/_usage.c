@@ -1,30 +1,22 @@
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
-#include "version.h"
 #include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "rc.h"
+#include "rc-misc.h"
+#include "_usage.h"
+#include "version.h"
 
 #if lint
 #  define _noreturn
@@ -35,7 +27,7 @@
 #  define _noreturn
 #endif
 
-static void set_quiet_options(void)
+void set_quiet_options(void)
 {
 	static int qcount = 0;
 
@@ -50,14 +42,13 @@ static void set_quiet_options(void)
 	}
 }
 
-_noreturn static void
-show_version(void)
+_noreturn void show_version(void)
 {
-	const char *bootlevel = NULL;
+	const char *systype = NULL;
 
 	printf("%s (OpenRC", applet);
-	if ((bootlevel = rc_sys()))
-		printf(" [%s]", bootlevel);
+	if ((systype = rc_sys()))
+		printf(" [%s]", systype);
 	printf(") %s", VERSION);
 #ifdef BRANDING
 	printf(" (%s)", BRANDING);
@@ -66,8 +57,7 @@ show_version(void)
 	exit(EXIT_SUCCESS);
 }
 
-_noreturn static void
-usage(int exit_status)
+_noreturn void usage(int exit_status)
 {
 	const char * const has_arg[] = { "", "<arg>", "[arg]" };
 	int i;
@@ -77,15 +67,15 @@ usage(int exit_status)
 	char *token;
 	char val[4] = "-?,";
 
-#ifdef usagestring
-	printf(usagestring);
-#else
-	printf("Usage: %s [options] ", applet);
-#endif
-#ifdef extraopts
-	printf(extraopts);
-#endif
-	printf("\n\nOptions: [" getoptstring "]\n");
+	if (usagestring)
+		printf("%s", usagestring);
+	else
+		printf("Usage: %s [options] ", applet);
+
+	if (extraopts)
+		printf("%s", extraopts);
+
+	printf("\n\nOptions: [ %s ]\n", getoptstring);
 	for (i = 0; longopts[i].name; ++i) {
 		val[1] = longopts[i].val;
 		len = printf("  %3s --%s %s", isprint(longopts[i].val) ? val : "",

@@ -1,35 +1,23 @@
 /*
-  librc
-  core RC functions
-*/
+ * librc
+ * core RC functions
+ */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 const char librc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
 
+#include "queue.h"
 #include "librc.h"
 #ifdef __FreeBSD__
 #  include <sys/sysctl.h>
@@ -100,7 +88,9 @@ ls_dir(const char *dir, int options)
 					continue;
 			}
 			if (options & LS_DIR) {
-				if (stat(d->d_name, &buf) == 0 &&
+				snprintf(file, sizeof(file), "%s/%s",
+				    dir, d->d_name);
+				if (stat(file, &buf) != 0 ||
 				    !S_ISDIR(buf.st_mode))
 					continue;
 			}
@@ -207,14 +197,10 @@ found:
 }
 #endif
 
-/* New sys identification code
- * Not to be used for any binaries outside of openrc. */
-const char *
-rc_sys_v2(void)
+
+static const char *
+get_systype(void)
 {
-#define __STRING_SWITCH(x) { char *__string_switch = x; if (false) {}
-#define __STRING_CASE(y) else if (strcmp(__string_switch,y) == 0)
-#define __STRING_SWITCH_END() }
 	char *systype = rc_conf_value("rc_sys");
 	if (systype) {
 		char *s = systype;
@@ -224,43 +210,38 @@ rc_sys_v2(void)
 				*s = toupper((unsigned char) *s);
 			s++;
 		}
-		/* Now do detection */
-		__STRING_SWITCH(systype)
-		__STRING_CASE(RC_SYS_PREFIX)	{ return RC_SYS_PREFIX; }
-#ifdef __FreeBSD__
-		__STRING_CASE(RC_SYS_JAIL) { return RC_SYS_JAIL; }
-#endif /* __FreeBSD__ */
-#ifdef __NetBSD__
-		__STRING_CASE(RC_SYS_XEN0) { return RC_SYS_XEN0; }
-		__STRING_CASE(RC_SYS_XENU) { return RC_SYS_XENU; }
-#endif /* __NetBSD__ */
-#ifdef __linux__
-		__STRING_CASE(RC_SYS_XEN0) { return RC_SYS_XEN0; }
-		__STRING_CASE(RC_SYS_XENU) { return RC_SYS_XENU; }
-		__STRING_CASE(RC_SYS_UML) { return RC_SYS_UML; }
-		__STRING_CASE(RC_SYS_VSERVER) { return RC_SYS_VSERVER; }
-		__STRING_CASE(RC_SYS_OPENVZ) { return RC_SYS_OPENVZ; }
-		__STRING_CASE(RC_SYS_LXC) { return RC_SYS_LXC; }
-#endif /* __linux__ */
-		__STRING_SWITCH_END()
 	}
-#undef __STRING_SWITCH
-#undef __STRING_CASE
-#undef __STRING_SWITCH_END
-	return NULL;
+	return systype;
 }
-librc_hidden_def(rc_sys_v2)
 
-/* Old sys identification code.
- * Not to be used for any binaries outside of openrc. */
-const char *
-rc_sys_v1(void)
+static const char *
+detect_prefix(const char *systype)
 {
 #ifdef PREFIX
 	return RC_SYS_PREFIX;
 #else
+	if (systype) {
+		if (strcmp(systype, RC_SYS_NONE) == 0)
+			return NULL;
+		if (strcmp(systype, RC_SYS_PREFIX) == 0)
+			return RC_SYS_PREFIX;
+	}
 
+	return NULL;
+#endif
+}
+
+static const char *
+detect_container(const char *systype)
+{
 #ifdef __FreeBSD__
+	if (systype) {
+		if (strcmp(systype, RC_SYS_NONE) == 0)
+		       return NULL;
+		if (strcmp(systype, RC_SYS_JAIL) == 0)
+			return RC_SYS_JAIL;
+	}
+
 	int jailed = 0;
 	size_t len = sizeof(jailed);
 
@@ -269,19 +250,26 @@ rc_sys_v1(void)
 			return RC_SYS_JAIL;
 #endif
 
-#ifdef __NetBSD__
-	if (exists("/kern/xen/privcmd"))
-		return RC_SYS_XEN0;
-	if (exists("/kern/xen"))
-		return RC_SYS_XENU;
-#endif
-
 #ifdef __linux__
-	if (exists("/proc/xen")) {
-		if (file_regex("/proc/xen/capabilities", "control_d"))
-			return RC_SYS_XEN0;
-		return RC_SYS_XENU;
-	} else if (file_regex("/proc/cpuinfo", "UML"))
+	if (systype) {
+		if (strcmp(systype, RC_SYS_NONE) == 0)
+			return NULL;
+		if (strcmp(systype, RC_SYS_UML) == 0)
+			return RC_SYS_UML;
+		if (strcmp(systype, RC_SYS_VSERVER) == 0)
+			return RC_SYS_VSERVER;
+		if (strcmp(systype, RC_SYS_OPENVZ) == 0)
+			return RC_SYS_OPENVZ;
+		if (strcmp(systype, RC_SYS_LXC) == 0)
+			return RC_SYS_LXC;
+		if (strcmp(systype, RC_SYS_RKT) == 0)
+				return RC_SYS_RKT;
+		if (strcmp(systype, RC_SYS_SYSTEMD_NSPAWN) == 0)
+				return RC_SYS_SYSTEMD_NSPAWN;
+		if (strcmp(systype, RC_SYS_DOCKER) == 0)
+				return RC_SYS_DOCKER;
+	}
+	if (file_regex("/proc/cpuinfo", "UML"))
 		return RC_SYS_UML;
 	else if (file_regex("/proc/self/status",
 		"(s_context|VxID):[[:space:]]*[1-9]"))
@@ -293,21 +281,73 @@ rc_sys_v1(void)
 		return RC_SYS_OPENVZ; /* old test */
 	else if (file_regex("/proc/1/environ", "container=lxc"))
 		return RC_SYS_LXC;
+	else if (file_regex("/proc/1/environ", "container=rkt"))
+		return RC_SYS_RKT;
+	else if (file_regex("/proc/1/environ", "container=systemd-nspawn"))
+		return RC_SYS_SYSTEMD_NSPAWN;
+	else if (exists("/.dockerenv"))
+		return RC_SYS_DOCKER;
+	/* old test, I'm not sure when this was valid. */
+	else if (file_regex("/proc/1/environ", "container=docker"))
+		return RC_SYS_DOCKER;
 #endif
 
 	return NULL;
-#endif /* PREFIX */
 }
-librc_hidden_def(rc_sys_v1)
+
+static const char *
+detect_vm(const char *systype)
+{
+#ifdef __NetBSD__
+	if (systype) {
+		if (strcmp(systype, RC_SYS_NONE) == 0)
+			return NULL;
+		if (strcmp(systype, RC_SYS_XEN0) == 0)
+			return RC_SYS_XEN0;
+		if (strcmp(systype, RC_SYS_XENU) == 0)
+			return RC_SYS_XENU;
+	}
+	if (exists("/kern/xen/privcmd"))
+		return RC_SYS_XEN0;
+	if (exists("/kern/xen"))
+		return RC_SYS_XENU;
+#endif
+
+#ifdef __linux__
+	if (systype) {
+		if (strcmp(systype, RC_SYS_NONE) == 0)
+			return NULL;
+		if (strcmp(systype, RC_SYS_XEN0) == 0)
+			return RC_SYS_XEN0;
+		if (strcmp(systype, RC_SYS_XENU) == 0)
+			return RC_SYS_XENU;
+	}
+	if (exists("/proc/xen")) {
+		if (file_regex("/proc/xen/capabilities", "control_d"))
+			return RC_SYS_XEN0;
+		return RC_SYS_XENU;
+	}
+#endif
+
+	return NULL;
+}
 
 const char *
 rc_sys(void)
 {
-	if (rc_conf_value("rc_sys")) {
-		return rc_sys_v2();
-	} else {
-		return rc_sys_v1();
+	const char *systype;
+	const char *sys;
+
+	systype = get_systype();
+	sys = detect_prefix(systype);
+	if (!sys) {
+		sys = detect_container(systype);
+		if (!sys) {
+			sys = detect_vm(systype);
+		}
 	}
+
+	return sys;
 }
 librc_hidden_def(rc_sys)
 

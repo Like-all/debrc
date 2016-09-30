@@ -1,25 +1,12 @@
-.\" Copyright (c) 2007-2009 Roy Marples
+.\" Copyright (c) 2007-2015 The OpenRC Authors.
+.\" See the Authors file at the top-level directory of this distribution and
+.\" https://github.com/OpenRC/openrc/blob/master/AUTHORS
 .\"
-.\" Redistribution and use in source and binary forms, with or without
-.\" modification, are permitted provided that the following conditions
-.\" are met:
-.\" 1. Redistributions of source code must retain the above copyright
-.\"    notice, this list of conditions and the following disclaimer.
-.\" 2. Redistributions in binary form must reproduce the above copyright
-.\"    notice, this list of conditions and the following disclaimer in the
-.\"    documentation and/or other materials provided with the distribution.
-.\"
-.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
-.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
-.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-.\" SUCH DAMAGE.
+.\" This file is part of OpenRC. It is subject to the license terms in
+.\" the LICENSE file found in the top-level directory of this
+.\" distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+.\" This file may not be copied, modified, propagated, or distributed
+.\"    except according to the terms contained in the LICENSE file.
 .\"
 .Dd December 31, 2011
 .Dt openrc-run 8 SMM
@@ -107,23 +94,79 @@ the service has already been stopped.
 String describing the service.
 .It Ar description_$command
 String describing the extra command.
+.It Ar supervisor
+Supervisor to use to monitor this daemon. If this is unset or invalid,
+start-stop-daemon will be used.
+Currently, we support s6 from scarnet software, and supervise-daemon
+which is a light-weight supervisor internal to OpenRC.
+To use s6, set
+supervisor=s6.
+or set
+supervisor=supervise-daemon
+to use supervise-daemon.
+Note that supervise-daemon is still in early development, so it is
+considered experimental.
+.It Ar s6_service_path
+The path to the s6 service directory if you are monitoring this service
+with S6. The default is /var/svc.d/${RC_SVCNAME}.
+.It Ar s6_svwait_options_start
+The options to pass to s6-svwait when starting the service via s6.
+.It Ar s6_service_timeout_stop
+The amount of time, in milliseconds, s6-svc should wait for the service
+to go down when stopping the service. The default is 10000.
 .It Ar start_stop_daemon_args
 List of arguments passed to start-stop-daemon when starting the daemon.
 .It Ar command
 Daemon to start or stop via
 .Nm start-stop-daemon
+or
+.Nm supervise-daemon
 if no start or stop function is defined by the service.
 .It Ar command_args
-List of arguments to pass to the daemon when starting.
-.It Ar command_background
-Set this to "true", "yes" or "1" (case-insensitive) to force the daemon into
-the background. This implies the "--make-pidfile" and "--pidfile" option of
+List of arguments to pass to the daemon when starting via
+.Nm start-stop-daemon .
+.It Ar command_args_background
+This variable should be used if the daemon you are starting with
 .Xr start-stop-daemon 8
-so the pidfile variable must be set.
+runs in the foreground by default but has its own command line options
+to request that it background and write a pid file. It should be set to
+those options. It should not be used at the same time as
+command_background, because command_background requests that
+.Xr start-stop-daemon 8
+go into the background before executing the daemon.
+.It Ar command_args_foreground
+List of arguments to pass to the daemon when starting via
+.Nm supervise-daemon .
+to force the daemon to stay in the foreground
+.It Ar command_background
+Set this to "true", "yes" or "1" (case-insensitive) if you want 
+.Xr start-stop-daemon 8
+to force the daemon into the background. This forces the
+"--make-pidfile" and "--pidfile" options, so the pidfile variable must be set.
+.It Ar command_progress
+Set this to "true", "yes" or "1" (case-insensitive) if you want 
+.Xr start-stop-daemon 8
+to display a progress meter when waiting for a daemon to stop.
+.It Ar command_user
+If the daemon does not support changing to a different user id, you can
+use this to change the user id before
+.Xr start-stop-daemon 8
+or
+.Xr supervise-daemon 8
+launches the daemon
+.It Ar chroot
+.Xr start-stop-daemon 8
+and
+.Xr supervise-daemon 8
+will chroot into this path before writing the pid file or starting the daemon.
 .It Ar pidfile
 Pidfile to use for the above defined command.
 .It Ar name
 Display name used for the above defined command.
+.It Ar procname
+Process name to match when signaling the daemon.
+.It Ar stopsig
+Signal to send when stopping the daemon.
 .It Ar retry
 Retry schedule to use when stopping the daemon. It can either be a
 timeout in seconds or multiple signal/timeout pairs (like SIGTERM/5).
@@ -137,6 +180,10 @@ used along with in_background_fake to support re-entrant services.
 .It Ar in_background_fake
 Space separated list of commands which should always succeed when
 in_background is yes.
+.Pp
+Keep in mind that eval is used to process chroot, command, command_args_*,
+command_user, pidfile and procname. This may affect how they are
+evaluated depending on how they are quoted.
 .El
 .Sh DEPENDENCIES
 You should define a
@@ -147,24 +194,28 @@ will start and stop it in the right order in relation to other services.
 As it's a function it can be very flexible, see the example below.
 Here is a list of the functions you can use in a
 .Ic depend
-function. You simply pass the names of the services to it to add to that
-dependency type, or prefix it with ! to remove it.
+function. You simply pass the names of the services you want to add to
+that dependency type to the function, or prefix the names with ! to
+remove them from the dependencies.
 .Bl -tag -width "RC_DEFAULTLEVEL"
 .It Ic need
 The service will refuse to start until needed services have started and it
 will refuse to stop until any services that need it have stopped.
 .It Ic use
-The service will attempt to start any services we use that have been added
+The service will attempt to start any services it uses that have been added
 to the runlevel.
+.It Ic want
+The service will attempt to start any services it wants, regardless of
+whether they have been added to the runlevel.
 .It Ic after
 The service will start after these services and stop before these services.
 .It Ic before
 The service will start before these services and stop after these services.
 .It Ic provide
-We provide this virtual service. For example, named provides dns.
-Virtual services take precedence over real services, so it is highly
-recommended that you do not have a real service that has the same name
-as a virtual service.
+The service provides this virtual service. For example, named provides dns.
+Note that it is not legal to have a virtual and real service with the
+same name. If you do this, you will receive an error message, and you
+must rename either the real or virtual service.
 .It Ic config
 We should recalculate our dependencies if the listed files have changed.
 .It Ic keyword
@@ -194,6 +245,8 @@ Same as -jail, but for Linux Resource Containers (LXC).
 Same as -jail, but for OpenVZ systems.
 .It Dv -prefix
 Same as -jail, but for Prefix systems.
+.It Dv -rkt
+Same as -jail, but for RKT systems.
 .It Dv -uml
 Same as -jail, but for UML systems.
 .It Dv -vserver
@@ -202,6 +255,11 @@ Same as -jail, but for VServer systems.
 Same as -jail, but for Xen DOM0 systems.
 .It Dv -xenu
 Same as -jail, but for Xen DOMU systems.
+.It Dv -docker
+Same as -jail, but for docker systems.
+.It Dv -containers
+Same as -jail, but for all relevant container types on the operating
+system.
 .El
 .El
 .Pp
@@ -443,6 +501,9 @@ rc_net_tap1_provide="!net"
 # It's also possible to negate keywords. This is mainly useful for prefix
 # users testing OpenRC.
 rc_keyword="!-prefix"
+# This can also be used to block a script from runining in all
+# containers except one or two
+rc_keyword="!-containers !-docker"
 .Ed
 .Sh EXAMPLES
 .Pp

@@ -1,6 +1,13 @@
 #!@SHELL@
-# Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+#    except according to the terms contained in the LICENSE file.
 
 # This basically mounts $svcdir as a ramdisk, but preserving its content
 # which allows us to run depscan.sh
@@ -23,6 +30,11 @@ mount_svcdir()
 
 . "$RC_LIBEXECDIR"/sh/functions.sh
 [ -r "@SYSCONFDIR@/rc.conf" ] && . "@SYSCONFDIR@/rc.conf"
+if [ -d "@SYSCONFDIR@/rc.conf.d" ]; then
+	for _f in "@SYSCONFDIR@"/rc.conf.d/*.conf; do
+		[ -r "$_f" ] && . "$_f"
+	done
+fi
 
 # Disable devd until we need it
 if [ -z "$RC_SYS" -a "$RC_UNAME" = "FreeBSD" ]; then
@@ -45,7 +57,7 @@ case "$(openrc --sys)" in
 esac
 retval=$?
 
-if [ -e "$RC_LIBEXECDIR"/cache/deptree ]; then
+if [ -e "$RC_LIBEXECDIR"/cache/softlevel ]; then
 	cp -p "$RC_LIBEXECDIR"/cache/* "$RC_SVCDIR" 2>/dev/null
 fi
 

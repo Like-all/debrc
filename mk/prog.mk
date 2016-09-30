@@ -1,8 +1,15 @@
-# rules to build a library
+# rules to build a program
 # based on FreeBSD's bsd.prog.mk
 
-# Copyright (c) 2008 Roy Marples <roy@marples.name>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2008-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
 
 OBJS+=			${SRCS:.c=.o}
 
@@ -25,10 +32,10 @@ CLEANFILES+=		${OBJS} ${PROG}
 all: depend ${PROG}
 
 %.o: %.c
-	${CC} ${CFLAGS} ${CPPFLAGS} -c $< -o $@
+	${CC} ${LOCAL_CFLAGS} ${LOCAL_CPPFLAGS} ${CFLAGS} ${CPPFLAGS} -c $< -o $@
 
 ${PROG}: ${SCRIPTS} ${OBJS}
-	${CC} ${CFLAGS} ${LDFLAGS} -o $@ ${OBJS} ${LDADD}
+	${CC} ${LOCAL_CFLAGS} ${LOCAL_LDFLAGS}  ${CFLAGS} ${LDFLAGS} -o $@ ${OBJS} ${LDADD}
 
 clean:
 	rm -f ${CLEANFILES}

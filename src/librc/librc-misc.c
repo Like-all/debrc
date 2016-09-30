@@ -1,33 +1,23 @@
 /*
-  rc-misc.c
-  rc misc functions
+ * rc-misc.c
+ * rc misc functions
 */
 
 /*
- * Copyright (c) 2007-2008 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
+#include <fnmatch.h>
+
+#include "queue.h"
 #include "librc.h"
 
 bool
@@ -213,12 +203,78 @@ rc_config_list(const char *file)
 }
 librc_hidden_def(rc_config_list)
 
-/*
- * Override some specific rc.conf options on the kernel command line
- */
-#ifdef __linux__
-static RC_STRINGLIST *rc_config_override(RC_STRINGLIST *config)
+static void rc_config_set_value(RC_STRINGLIST *config, char *value)
 {
+	RC_STRING *cline;
+	char *entry;
+	size_t i = 0;
+	char *newline;
+	char *p = value;
+	bool replaced;
+	char *token;
+
+	if (! p)
+		return;
+	if (strncmp(p, "export ", 7) == 0)
+		p += 7;
+	if (! (token = strsep(&p, "=")))
+		return;
+
+	entry = xstrdup(token);
+	/* Preserve shell coloring */
+	if (*p == '$')
+		token = value;
+	else
+		do {
+			/* Bash variables are usually quoted */
+			token = strsep(&p, "\"\'");
+		} while (token && *token == '\0');
+
+	/* Drop a newline if that's all we have */
+	if (token) {
+		i = strlen(token) - 1;
+		if (token[i] == '\n')
+			token[i] = 0;
+
+		i = strlen(entry) + strlen(token) + 2;
+		newline = xmalloc(sizeof(char) * i);
+		snprintf(newline, i, "%s=%s", entry, token);
+	} else {
+		i = strlen(entry) + 2;
+		newline = xmalloc(sizeof(char) * i);
+		snprintf(newline, i, "%s=", entry);
+	}
+
+	replaced = false;
+	/* In shells the last item takes precedence, so we need to remove
+	   any prior values we may already have */
+	TAILQ_FOREACH(cline, config, entries) {
+		i = strlen(entry);
+		if (strncmp(entry, cline->value, i) == 0 && cline->value[i] == '=') {
+			/* We have a match now - to save time we directly replace it */
+			free(cline->value);
+			cline->value = newline;
+			replaced = true;
+			break;
+		}
+	}
+
+	if (!replaced) {
+		rc_stringlist_add(config, newline);
+		free(newline);
+	}
+	free(entry);
+}
+
+/*
+ * Override some specific rc.conf options on the kernel command line.
+ * I only know how to do this in Linux, so if someone wants to supply
+ * a patch for this on *BSD or tell me how to write the code to do this,
+ * any suggestions are welcome.
+ */
+static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
+{
+#ifdef __linux__
 	RC_STRINGLIST *overrides;
 	RC_STRING *cline, *override, *config_np;
 	char *tmp = NULL;
@@ -267,89 +323,59 @@ static RC_STRINGLIST *rc_config_override(RC_STRINGLIST *config)
 	}
 
 	rc_stringlist_free(overrides);
+#endif
 	return config;
 }
-#endif
+
+static RC_STRINGLIST * rc_config_directory(RC_STRINGLIST *config)
+{
+	DIR *dp;
+	struct dirent *d;
+	RC_STRINGLIST *rc_conf_d_files = rc_stringlist_new();
+	RC_STRING *fname;
+	RC_STRINGLIST *rc_conf_d_list;
+	char path[PATH_MAX];
+	RC_STRING *line;
+
+	if ((dp = opendir(RC_CONF_D)) != NULL) {
+		while ((d = readdir(dp)) != NULL) {
+			if (fnmatch("*.conf", d->d_name, FNM_PATHNAME) == 0) {
+				rc_stringlist_addu(rc_conf_d_files, d->d_name);
+			}
+		}
+		closedir(dp);
+
+		if (rc_conf_d_files) {
+			rc_stringlist_sort(&rc_conf_d_files);
+			TAILQ_FOREACH(fname, rc_conf_d_files, entries) {
+				if (! fname->value)
+					continue;
+				sprintf(path, "%s/%s", RC_CONF_D, fname->value);
+				rc_conf_d_list = rc_config_list(path);
+				TAILQ_FOREACH(line, rc_conf_d_list, entries)
+					if (line->value)
+						rc_config_set_value(config, line->value);
+				rc_stringlist_free(rc_conf_d_list);
+			}
+			rc_stringlist_free(rc_conf_d_files);
+		}
+	}
+	return config;
+}
 
 RC_STRINGLIST *
 rc_config_load(const char *file)
 {
 	RC_STRINGLIST *list;
 	RC_STRINGLIST *config;
-	char *token;
 	RC_STRING *line;
-	RC_STRING *cline;
-	size_t i = 0;
-	bool replaced;
-	char *entry;
-	char *newline;
-	char *p;
 
 	list = rc_config_list(file);
 	config = rc_stringlist_new();
 	TAILQ_FOREACH(line, list, entries) {
-		/* Get entry */
-		p = line->value;
-		if (! p)
-			continue;
-		if (strncmp(p, "export ", 7) == 0)
-			p += 7;
-		if (! (token = strsep(&p, "=")))
-			continue;
-
-		entry = xstrdup(token);
-		/* Preserve shell coloring */
-		if (*p == '$')
-			token = line->value;
-		else
-			do {
-				/* Bash variables are usually quoted */
-				token = strsep(&p, "\"\'");
-			} while (token && *token == '\0');
-
-		/* Drop a newline if that's all we have */
-		if (token) {
-			i = strlen(token) - 1;
-			if (token[i] == '\n')
-				token[i] = 0;
-
-			i = strlen(entry) + strlen(token) + 2;
-			newline = xmalloc(sizeof(char) * i);
-			snprintf(newline, i, "%s=%s", entry, token);
-		} else {
-			i = strlen(entry) + 2;
-			newline = xmalloc(sizeof(char) * i);
-			snprintf(newline, i, "%s=", entry);
-		}
-
-		replaced = false;
-		/* In shells the last item takes precedence, so we need to remove
-		   any prior values we may already have */
-		TAILQ_FOREACH(cline, config, entries) {
-			i = strlen(entry);
-			if (strncmp(entry, cline->value, i) == 0 && cline->value[i] == '=') {
-				/* We have a match now - to save time we directly replace it */
-				free(cline->value);
-				cline->value = newline;
-				replaced = true;
-				break;
-			}
-		}
-
-		if (!replaced) {
-			rc_stringlist_add(config, newline);
-			free(newline);
-		}
-		free(entry);
+		rc_config_set_value(config, line->value);
 	}
 	rc_stringlist_free(list);
-
-#ifdef __linux__
-	/* Only override rc.conf settings */
-	if (strcmp(file, RC_CONF) == 0) {
-		config = rc_config_override(config);
-	}
-#endif
 
 	return config;
 }
@@ -378,6 +404,12 @@ librc_hidden_def(rc_config_value)
  * each rc_conf_value call */
 static RC_STRINGLIST *rc_conf = NULL;
 
+static void
+_free_rc_conf(void)
+{
+	rc_stringlist_free(rc_conf);
+}
+
 char *
 rc_conf_value(const char *setting)
 {
@@ -387,18 +419,17 @@ rc_conf_value(const char *setting)
 
 	if (! rc_conf) {
 		rc_conf = rc_config_load(RC_CONF);
-#ifdef DEBUG_MEMORY
 		atexit(_free_rc_conf);
-#endif
 
 		/* Support old configs. */
 		if (exists(RC_CONF_OLD)) {
 			old = rc_config_load(RC_CONF_OLD);
 			TAILQ_CONCAT(rc_conf, old, entries);
-#ifdef DEBUG_MEMORY
 			free(old);
-#endif
 		}
+
+		rc_conf = rc_config_directory(rc_conf);
+	rc_conf = rc_config_kcl(rc_conf);
 
 		/* Convert old uppercase to lowercase */
 		TAILQ_FOREACH(s, rc_conf, entries) {
@@ -414,11 +445,3 @@ rc_conf_value(const char *setting)
 	return rc_config_value(rc_conf, setting);
 }
 librc_hidden_def(rc_conf_value)
-
-#ifdef DEBUG_MEMORY
-static void
-_free_rc_conf(void)
-{
-	rc_stringlist_free(rc_conf);
-}
-#endif

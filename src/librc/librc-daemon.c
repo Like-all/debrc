@@ -1,36 +1,25 @@
 /*
-  librc-daemon
-  Finds PID for given daemon criteria
+ * librc-daemon
+ * Finds PID for given daemon criteria
 */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
+#include "queue.h"
 #include "librc.h"
 
-#if defined(__linux__) || defined (__GLIBC__)
+#if defined(__linux__) || (defined (__FreeBSD_kernel__) && defined(__GLIBC__)) \
+	|| defined(__GNU__)
 static bool
 pid_is_exec(pid_t pid, const char *exec)
 {
@@ -98,7 +87,7 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 	pid_t p;
 	char buffer[PATH_MAX];
 	struct stat sb;
-	pid_t runscript_pid = 0;
+	pid_t openrc_pid = 0;
 	char *pp;
 	RC_PIDLIST *pids = NULL;
 	RC_PID *pi;
@@ -107,7 +96,7 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 		return NULL;
 
 	/*
-	  We never match RC_RUNSCRIPT_PID if present so we avoid the below
+	  We never match RC_OPENRC_PID if present so we avoid the below
 	  scenario
 
 	  /etc/init.d/ntpd stop does
@@ -117,9 +106,9 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 	  nasty
 	*/
 
-	if ((pp = getenv("RC_RUNSCRIPT_PID"))) {
-		if (sscanf(pp, "%d", &runscript_pid) != 1)
-			runscript_pid = 0;
+	if ((pp = getenv("RC_OPENRC_PID"))) {
+		if (sscanf(pp, "%d", &openrc_pid) != 1)
+			openrc_pid = 0;
 	}
 
 	/*
@@ -145,7 +134,7 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 	while ((entry = readdir(procdir)) != NULL) {
 		if (sscanf(entry->d_name, "%d", &p) != 1)
 			continue;
-		if (runscript_pid != 0 && runscript_pid == p)
+		if (openrc_pid != 0 && openrc_pid == p)
 			continue;
 		if (pid != 0 && pid != p)
 			continue;
@@ -509,6 +498,8 @@ rc_service_daemons_crashed(const char *service)
 	RC_STRINGLIST *list = NULL;
 	RC_STRING *s;
 	size_t i;
+	char *ch_root;
+	char *spidfile;
 
 	path += snprintf(dirpath, sizeof(dirpath), RC_SVCDIR "/daemons/%s",
 	    basename_c(service));
@@ -552,6 +543,16 @@ rc_service_daemons_crashed(const char *service)
 			}
 		}
 		fclose(fp);
+
+		ch_root = rc_service_value_get(basename_c(service), "chroot");
+		spidfile = pidfile;
+		if (ch_root && pidfile) {
+			spidfile = xmalloc(strlen(ch_root) + strlen(pidfile) + 1);
+			strcpy(spidfile, ch_root);
+			strcat(spidfile, pidfile);
+			free(pidfile);
+			pidfile = spidfile;
+		}
 
 		pid = 0;
 		if (pidfile) {

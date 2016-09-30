@@ -1,31 +1,18 @@
 /*
-   rc-status
-   Display the status of the services in runlevels
-   */
+ * rc-status.c
+ * Display the status of the services in runlevels
+ */
 
 /*
- * Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
+ * Copyright (c) 2007-2015 The OpenRC Authors.
+ * See the Authors file at the top-level directory of this distribution and
+ * https://github.com/OpenRC/openrc/blob/master/AUTHORS
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * This file is part of OpenRC. It is subject to the license terms in
+ * the LICENSE file found in the top-level directory of this
+ * distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+ * This file may not be copied, modified, propagated, or distributed
+ *    except according to the terms contained in the LICENSE file.
  */
 
 #include <getopt.h>
@@ -34,47 +21,45 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "builtins.h"
 #include "einfo.h"
+#include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "_usage.h"
 
-extern const char *applet;
+const char *applet = NULL;
+const char *extraopts = NULL;
+const char *getoptstring = "aclmrsu" getoptstring_COMMON;
+const struct option longopts[] = {
+	{"all",         0, NULL, 'a'},
+	{"crashed",     0, NULL, 'c'},
+	{"list",        0, NULL, 'l'},
+	{"manual",        0, NULL, 'm'},
+	{"runlevel",    0, NULL, 'r'},
+	{"servicelist", 0, NULL, 's'},
+	{"unused",      0, NULL, 'u'},
+	longopts_COMMON
+};
+const char * const longopts_help[] = {
+	"Show services from all run levels",
+	"Show crashed services",
+	"Show list of run levels",
+	"Show manually started services",
+	"Show the name of the current runlevel",
+	"Show service list",
+	"Show services not assigned to any runlevel",
+	longopts_help_COMMON
+};
+const char *usagestring = ""						\
+	"Usage: rc-status [options] <runlevel>...\n"		\
+	"   or: rc-status [options] [-a | -c | -l | -m | -r | -s | -u]";
+
 static bool test_crashed = false;
 static RC_DEPTREE *deptree;
 static RC_STRINGLIST *types;
 
 static RC_STRINGLIST *levels, *services, *tmp, *alist;
 static RC_STRINGLIST *sservices, *nservices, *needsme;
-
-bool
-_rc_can_find_pids(void)
-{
-	RC_PIDLIST *pids;
-	RC_PID *pid;
-	RC_PID *pid2;
-	bool retval = false;
-
-	if (geteuid() == 0)
-		return true;
-
-	/* If we cannot see process 1, then we don't test to see if
-	 * services crashed or not */
-	pids = rc_find_pids(NULL, NULL, 0, 1);
-	if (pids) {
-		pid = LIST_FIRST(pids);
-		if (pid) {
-			retval = true;
-			while (pid) {
-				pid2 = LIST_NEXT(pid, entries);
-				free(pid);
-				pid = pid2;
-			}
-		}
-		free(pids);
-	}
-	return retval;
-}
 
 static void
 print_level(const char *prefix, const char *level)
@@ -190,46 +175,21 @@ print_stacked_services(const char *runlevel)
 	stackedlevels = NULL;
 }
 
-#include "_usage.h"
-#define usagestring ""						\
-	"Usage: rc-status [options] <runlevel>...\n"		\
-	"   or: rc-status [options] [-a | -c | -l | -r | -s | -u]"
-#define getoptstring "aclrsu" getoptstring_COMMON
-static const struct option longopts[] = {
-	{"all",         0, NULL, 'a'},
-	{"crashed",     0, NULL, 'c'},
-	{"list",        0, NULL, 'l'},
-	{"runlevel",    0, NULL, 'r'},
-	{"servicelist", 0, NULL, 's'},
-	{"unused",      0, NULL, 'u'},
-	longopts_COMMON
-};
-static const char * const longopts_help[] = {
-	"Show services from all run levels",
-	"Show crashed services",
-	"Show list of run levels",
-	"Show the name of the current runlevel",
-	"Show service list",
-	"Show services not assigned to any runlevel",
-	longopts_help_COMMON
-};
-#include "_usage.c"
-
-int
-rc_status(int argc, char **argv)
+int main(int argc, char **argv)
 {
     RC_STRING *s, *l, *t, *level;
-
+	bool show_all = false;
 	char *p, *runlevel = NULL;
-	int opt, aflag = 0, retval = 0;
+	int opt, retval = 0;
 
 	test_crashed = _rc_can_find_pids();
 
+	applet = basename_c(argv[0]);
 	while ((opt = getopt_long(argc, argv, getoptstring, longopts,
 				  (int *) 0)) != -1)
 		switch (opt) {
 		case 'a':
-			aflag++;
+			show_all = true;
 			levels = rc_runlevel_list();
 			break;
 		case 'c':
@@ -246,6 +206,27 @@ rc_status(int argc, char **argv)
 			levels = rc_runlevel_list();
 			TAILQ_FOREACH(l, levels, entries)
 				printf("%s\n", l->value);
+			goto exit;
+		case 'm':
+			services = rc_services_in_runlevel(NULL);
+			levels = rc_runlevel_list();
+			TAILQ_FOREACH_SAFE(s, services, entries, t) {
+				TAILQ_FOREACH(l, levels, entries)
+					if (rc_service_in_runlevel(s->value, l->value)) {
+						TAILQ_REMOVE(services, s, entries);
+						free(s->value);
+						free(s);
+						break;
+					}
+			}
+			TAILQ_FOREACH_SAFE(s, services, entries, t)
+				if (rc_service_state(s->value) &
+					(RC_SERVICE_STOPPED | RC_SERVICE_HOTPLUGGED)) {
+					TAILQ_REMOVE(services, s, entries);
+					free(s->value);
+					free(s);
+				}
+			print_services(NULL, services);
 			goto exit;
 		case 'r':
 			runlevel = rc_runlevel_get();
@@ -307,7 +288,7 @@ rc_status(int argc, char **argv)
 		services = NULL;
 	}
 
-	if (aflag || argc < 2) {
+	if (show_all || argc < 2) {
 		/* Show hotplugged services */
 		print_level("Dynamic", "hotplugged");
 		services = rc_services_in_state(RC_SERVICE_HOTPLUGGED);
@@ -316,7 +297,7 @@ rc_status(int argc, char **argv)
 		services = NULL;
 
 		/* Show manually started and unassigned depended services */
-		if (aflag) {
+		if (show_all) {
 			rc_stringlist_free(levels);
 			levels = rc_stringlist_new();
 			if (!runlevel)
@@ -342,6 +323,7 @@ rc_status(int argc, char **argv)
 		}
 		needsme = rc_stringlist_new();
 		rc_stringlist_add(needsme, "needsme");
+		rc_stringlist_add(needsme, "wantsme");
 		nservices = rc_stringlist_new();
 		alist = rc_stringlist_new();
 		l = rc_stringlist_add(alist, "");
@@ -364,7 +346,7 @@ rc_status(int argc, char **argv)
 		 * be added to the list
 		 */
 		unsetenv("RC_SVCNAME");
-		print_level("Dynamic", "needed");
+		print_level("Dynamic", "needed/wanted");
 		print_services(NULL, nservices);
 		print_level("Dynamic", "manual");
 		print_services(NULL, services);
@@ -372,7 +354,6 @@ rc_status(int argc, char **argv)
 
 exit:
 	free(runlevel);
-#ifdef DEBUG_MEMORY
 	rc_stringlist_free(alist);
 	rc_stringlist_free(needsme);
 	rc_stringlist_free(sservices);
@@ -381,7 +362,6 @@ exit:
 	rc_stringlist_free(types);
 	rc_stringlist_free(levels);
 	rc_deptree_free(deptree);
-#endif
 
 	return retval;
 }

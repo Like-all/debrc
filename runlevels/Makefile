@@ -1,8 +1,9 @@
 include ../mk/net.mk
 
 BOOT=		bootmisc fsck hostname localmount loopback \
-		root swap swapfiles sysctl urandom ${BOOT-${OS}}
+		root swap sysctl urandom ${BOOT-${OS}}
 DEFAULT=	local netmount
+NONETWORK=	local
 SHUTDOWN=	savecache ${SHUTDOWN-${OS}}
 SYSINIT=	${SYSINIT-${OS}}
 
@@ -10,6 +11,7 @@ LEVELDIR=	${DESTDIR}/${SYSCONFDIR}/runlevels
 SYSINITDIR=	${LEVELDIR}/sysinit
 BOOTDIR=	${LEVELDIR}/boot
 DEFAULTDIR=	${LEVELDIR}/default
+NONETWORKDIR=	${LEVELDIR}/nonetwork
 SHUTDOWNDIR=	${LEVELDIR}/shutdown
 
 ifeq (${MKNET},yes)
@@ -30,11 +32,12 @@ SYSINIT-${OS}=
 BOOT-BSD=	hostid newsyslog savecore syslogd swap-blk
 
 # Generic BSD stuff
-BOOT-FreeBSD+=	hostid newsyslog savecore syslogd
+BOOT-FreeBSD+=	hostid modules newsyslog savecore syslogd
 # FreeBSD specific stuff
 BOOT-FreeBSD+=	adjkerntz dumpon syscons
 
-BOOT-Linux+=	hwclock keymaps modules mtab procfs termencoding tmpfiles.setup
+BOOT-Linux+=	binfmt hwclock keymaps modules mtab procfs termencoding \
+	tmpfiles.setup
 SHUTDOWN-Linux=	killprocs mount-ro
 SYSINIT-Linux=	devfs dmesg sysfs tmpfiles.dev
 
@@ -70,6 +73,14 @@ install:
 				grep -q "keyword .*-prefix" ${INITFILES}/"$$x" && continue; \
 			fi; \
 			ln -snf ${INITDIR}/"$$x" ${DEFAULTDIR}/"$$x" || exit $$?; done \
+	fi
+	if ! test -d "${NONETWORKDIR}"; then \
+		${INSTALL} -d ${NONETWORKDIR} || exit $$?; \
+		for x in ${NONETWORK}; do \
+			if test "${MKPREFIX}" = yes; then \
+				grep -q "keyword .*-prefix" ${INITFILES}/"$$x" && continue; \
+			fi; \
+			ln -snf ${INITDIR}/"$$x" ${NONETWORKDIR}/"$$x" || exit $$?; done \
 	fi
 	if ! test -d "${SHUTDOWNDIR}"; then \
 		${INSTALL} -d ${SHUTDOWNDIR} || exit $$?; \

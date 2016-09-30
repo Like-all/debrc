@@ -1,6 +1,13 @@
 #!@SBINDIR@/openrc-run
-# Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
-# Released under the 2-clause BSD license.
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
 
 depend()
 {
@@ -119,11 +126,31 @@ clean_run()
 {
 	[ "$RC_SYS" = VSERVER -o "$RC_SYS" = LXC ] && return 0
 	local dir
+	# If / is still read-only due to a problem, this will fail!
+	if ! checkpath -W /; then
+		ewarn "/ is not writable; unable to clean up underlying /run"
+		return 1
+	fi
+	if ! checkpath -W /tmp; then
+		ewarn "/tmp is not writable; unable to clean up underlying /run"
+		return 1
+	fi
+	# Now we know that we can modify /tmp and /
+	# if mktemp -d fails, it returns an EMPTY string
+	# STDERR: mktemp: failed to create directory via template ‘/tmp/tmp.XXXXXXXXXX’: Read-only file system
+	# STDOUT: ''
+	rc=0
 	dir=$(mktemp -d)
-	mount --bind / $dir
-	rm -rf $dir/run/*
-	umount $dir
-	rm -rf $dir
+	if [ -n "$dir" -a -d $dir -a -w $dir ]; then
+		mount --bind / $dir && rm -rf $dir/run/* || rc=1
+		umount $dir && rmdir $dir
+	else
+		rc=1
+	fi
+	if [ $rc -ne 0 ]; then
+		ewarn "Could not clean up underlying /run on /"
+		return 1
+	fi
 }
 
 start()
@@ -193,10 +220,16 @@ start()
 	if yesno $log_dmesg; then
 		if $logw || checkpath -W /var/log; then
 			# Create an 'after-boot' dmesg log
-			if [ "$RC_SYS" != VSERVER -a "$RC_SYS" != OPENVZ -a "$RC_SYS" != LXC ]; then
-				dmesg > /var/log/dmesg
-				chmod 640 /var/log/dmesg
-			fi
+			case "$RC_SYS" in
+				VSERVER|OPENVZ|LXC|SYSTEMD-NSPAWN) ;;
+				*)
+					if yesno ${previous_dmesg:-no}; then
+						mv /var/log/dmesg /var/log/dmesg.old
+					fi
+					dmesg > /var/log/dmesg
+					chmod 640 /var/log/dmesg
+					;;
+			esac
 		fi
 	fi
 
