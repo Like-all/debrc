@@ -1,4 +1,4 @@
-# Copyright (c) 2008-2015 The OpenRC Authors.
+# Copyright (c) 2017 the OpenRC Authors.
 # See the Authors file at the top-level directory of this distribution and
 # https://github.com/OpenRC/openrc/blob/master/AUTHORS
 #
@@ -8,27 +8,13 @@
 # This file may not be copied, modified, propagated, or distributed
 # except according to the terms contained in the LICENSE file.
 
-SFX=		.Linux.in
-PKG_PREFIX?=	/usr
+MK=		../mk
+include		${MK}/os.mk
 
-CPPFLAGS+=	-D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700
-LIBDL=		-Wl,-Bdynamic -ldl
+SUBDIR=		deptree2dot init.d.examples openvpn
 
-ifeq (${MKSELINUX},yes)
-CPPFLAGS+= -DHAVE_SELINUX
-LIBSELINUX?= -lselinux
-LDADD += $(LIBSELINUX)
-
-ifneq (${MKPAM},pam)
-# if using selinux but not pam then we need crypt
-LIBCRYPT?= -lcrypt
-LDADD += $(LIBCRYPT)
+ifeq (${OS},Linux)
+SUBDIR+=	sysvinit
 endif
 
-endif
-
-ifeq (${MKAUDIT},yes)
-LIBAUDIT?=	-laudit
-CPPFLAGS+=	-DHAVE_AUDIT
-LDADD+=		${LIBAUDIT}
-endif
+include		${MK}/subdir.mk

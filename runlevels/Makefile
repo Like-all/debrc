@@ -36,10 +36,9 @@ BOOT-FreeBSD+=	hostid modules newsyslog savecore syslogd
 # FreeBSD specific stuff
 BOOT-FreeBSD+=	adjkerntz dumpon syscons
 
-BOOT-Linux+=	binfmt hwclock keymaps modules mtab procfs termencoding \
-	tmpfiles.setup
+BOOT-Linux+=	binfmt hwclock keymaps modules mtab procfs termencoding
 SHUTDOWN-Linux=	killprocs mount-ro
-SYSINIT-Linux=	devfs dmesg sysfs tmpfiles.dev
+SYSINIT-Linux=	devfs dmesg sysfs
 
 # Generic BSD stuff
 BOOT-NetBSD+=	hostid newsyslog savecore syslogd

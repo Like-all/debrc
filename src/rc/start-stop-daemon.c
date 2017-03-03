@@ -64,6 +64,7 @@ static struct pam_conv conv = { NULL, NULL};
 #include "rc.h"
 #include "rc-misc.h"
 #include "_usage.h"
+#include "helpers.h"
 
 const char *applet = NULL;
 const char *extraopts = NULL;
@@ -153,7 +154,9 @@ extern char **environ;
 # define SYS_ioprio_set __NR_ioprio_set
 #endif
 #if !defined(__DragonFly__)
-static inline int ioprio_set(int which, int who, int ioprio)
+static inline int ioprio_set(int which _unused,
+			     int who _unused,
+			     int ioprio _unused)
 {
 #ifdef SYS_ioprio_set
 	return syscall(SYS_ioprio_set, which, who, ioprio);
@@ -194,26 +197,45 @@ parse_signal(const char *sig)
 		int signal;
 	} SIGNALPAIR;
 
+#define signalpair_item(name) { #name, SIG##name },
+
 	static const SIGNALPAIR signallist[] = {
-		{ "ABRT",	SIGABRT	},
-		{ "ALRM",	SIGALRM	},
-		{ "FPE",	SIGFPE	},
-		{ "HUP",	SIGHUP	},
-		{ "ILL",	SIGILL	},
-		{ "INT",	SIGINT	},
-		{ "KILL",	SIGKILL	},
-		{ "PIPE",	SIGPIPE	},
-		{ "QUIT",	SIGQUIT	},
-		{ "SEGV",	SIGSEGV	},
-		{ "TERM",	SIGTERM	},
-		{ "USR1",	SIGUSR1	},
-		{ "USR2",	SIGUSR2	},
-		{ "CHLD",	SIGCHLD	},
-		{ "CONT",	SIGCONT	},
-		{ "STOP",	SIGSTOP	},
-		{ "TSTP",	SIGTSTP	},
-		{ "TTIN",	SIGTTIN	},
-		{ "TTOU",	SIGTTOU	},
+		signalpair_item(HUP)
+		signalpair_item(INT)
+		signalpair_item(QUIT)
+		signalpair_item(ILL)
+		signalpair_item(TRAP)
+		signalpair_item(ABRT)
+		signalpair_item(BUS)
+		signalpair_item(FPE)
+		signalpair_item(KILL)
+		signalpair_item(USR1)
+		signalpair_item(SEGV)
+		signalpair_item(USR2)
+		signalpair_item(PIPE)
+		signalpair_item(ALRM)
+		signalpair_item(TERM)
+		signalpair_item(CHLD)
+		signalpair_item(CONT)
+		signalpair_item(STOP)
+		signalpair_item(TSTP)
+		signalpair_item(TTIN)
+		signalpair_item(TTOU)
+		signalpair_item(URG)
+		signalpair_item(XCPU)
+		signalpair_item(XFSZ)
+		signalpair_item(VTALRM)
+		signalpair_item(PROF)
+#ifdef SIGWINCH
+		signalpair_item(WINCH)
+#endif
+#ifdef SIGIO
+		signalpair_item(IO)
+#endif
+#ifdef SIGPWR
+		signalpair_item(PWR)
+#endif
+		signalpair_item(SYS)
 		{ "NULL",	0 },
 	};
 
@@ -468,7 +490,7 @@ run_stop_schedule(const char *exec, const char *const *argv,
 				if (tkilled == 0) {
 					if (progressed)
 						printf("\n");
-						eerror("%s: no matching processes found", applet);
+					eerror("%s: no matching processes found", applet);
 				}
 				return tkilled;
 			}
@@ -696,17 +718,17 @@ int main(int argc, char **argv)
 		if (sscanf(tmp, "%d", &nicelevel) != 1)
 			eerror("%s: invalid nice level `%s' (SSD_NICELEVEL)",
 			    applet, tmp);
-		if ((tmp = getenv("SSD_IONICELEVEL"))) {
-			int n = sscanf(tmp, "%d:%d", &ionicec, &ioniced);
-			if (n != 1 && n != 2)
-				eerror("%s: invalid ionice level `%s' (SSD_IONICELEVEL)",
-				    applet, tmp);
-			if (ionicec == 0)
-				ioniced = 0;
-			else if (ionicec == 3)
-				ioniced = 7;
-			ionicec <<= 13; /* class shift */
-		}
+	if ((tmp = getenv("SSD_IONICELEVEL"))) {
+		int n = sscanf(tmp, "%d:%d", &ionicec, &ioniced);
+		if (n != 1 && n != 2)
+			eerror("%s: invalid ionice level `%s' (SSD_IONICELEVEL)",
+			    applet, tmp);
+		if (ionicec == 0)
+			ioniced = 0;
+		else if (ionicec == 3)
+			ioniced = 7;
+		ionicec <<= 13; /* class shift */
+	}
 
 	/* Get our user name and initial dir */
 	p = getenv("USER");
